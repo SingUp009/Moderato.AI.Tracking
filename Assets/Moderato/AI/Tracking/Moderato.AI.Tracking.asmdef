@@ -1,0 +1,14 @@
+{
+    "name": "Moderato.AI.Tracking",
+    "rootNamespace": "Moderato.AI.Tracking",
+    "references": [],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
