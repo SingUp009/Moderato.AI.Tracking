@@ -169,3 +169,9 @@ Packages/packages-lock.json linguist-generated
 
 # Exceptions for .asset files such as lightning pre-baking
 LightingData.asset     binary
+
+# ML models (Moderato.AI.Tracking)
+*.onnx                  lfs
+*.sentis                lfs
+*.tflite                lfs
+*.pb                    lfs
