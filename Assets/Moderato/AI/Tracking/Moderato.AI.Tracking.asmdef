@@ -1,7 +1,9 @@
 {
     "name": "Moderato.AI.Tracking",
     "rootNamespace": "Moderato.AI.Tracking",
-    "references": [],
+    "references": [
+        "Unity.InferenceEngine"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
