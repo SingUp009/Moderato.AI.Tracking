@@ -49,9 +49,35 @@
        backend:     SentisBackendFactory.ResolveBest());
    ```
 
-## 手（M6 で追加予定）
+## 手（M6）
 
 ソース：[`unity/sentis-hand-landmark`](https://huggingface.co/unity/sentis-hand-landmark)
+（Apache-2.0、Unity 公式変換済みアセット）
+
+このディレクトリ直下に以下を配置：
+
+| ファイル名 | 内容 | git 管理 |
+|---|---|---|
+| `hand_detector.onnx` | BlazeHand palm detector（入力 1×192×192×3、出力 boxes (1,2016,18) + scores (1,2016,1)） | ❌ 除外 |
+| `hand_landmarks_detector.onnx` | Hand landmark（入力 1×224×224×3、出力 landmarks (1,63) + handedness (1,1) + presence (1,1)） | ❌ 除外 |
+| `palm_detection_anchors.csv` | palm detector の anchor 定義（`cx,cy,w,h`、2016 行） | ✅ 含める |
+
+> **注意：** `pose_detection.onnx` 用の `anchors.csv`（2254 行）と
+> `palm_detection_anchors.csv`（~2016 行）は**別ファイル**。混在させないこと。
+
+### 配置後の手順
+
+1. 上記の `.onnx` と `palm_detection_anchors.csv` を `Assets/Moderato/AI/Tracking/Models/` に置く
+2. Unity Editor で Project ウィンドウをリフレッシュ
+3. `HandLandmarker` のコンストラクタ引数として渡す：
+   ```csharp
+   var hand = new HandLandmarker(
+       palmDetector:    palmDetectionAsset,    // hand_detector.onnx
+       handLandmarker:  handLandmarkAsset,     // hand_landmarks_detector.onnx
+       palmAnchorsCsv:  palmAnchorsCsvAsset,   // palm_detection_anchors.csv
+       backend:         SentisBackendFactory.ResolveBest());
+   ```
+4. 毎フレーム `DetectAsync(webcam.Frame)` を呼ぶ。戻り値は `HandFrame[2]`（内部バッファ参照）。
 
 ## 顔（M7 で追加予定）
 

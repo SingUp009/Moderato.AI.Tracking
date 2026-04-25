@@ -111,6 +111,29 @@ namespace Moderato.AI.Tracking.Core
         }
 
         /// <summary>
+        /// 2 つの <see cref="RotatedRect"/> の軸沿い IoU（Intersection over Union）を計算する。
+        /// 回転は無視する。Hand NMS など、矩形がほぼ正立している場面での抑制に使用。
+        /// </summary>
+        public static float ComputeIoU(in RotatedRect a, in RotatedRect b)
+        {
+            float aHalfW = a.Width  * 0.5f;
+            float aHalfH = a.Height * 0.5f;
+            float bHalfW = b.Width  * 0.5f;
+            float bHalfH = b.Height * 0.5f;
+
+            float interW = Mathf.Max(0f,
+                Mathf.Min(a.CenterX + aHalfW, b.CenterX + bHalfW) -
+                Mathf.Max(a.CenterX - aHalfW, b.CenterX - bHalfW));
+            float interH = Mathf.Max(0f,
+                Mathf.Min(a.CenterY + aHalfH, b.CenterY + bHalfH) -
+                Mathf.Max(a.CenterY - aHalfH, b.CenterY - bHalfH));
+
+            float inter = interW * interH;
+            float union = a.Width * a.Height + b.Width * b.Height - inter;
+            return union > 1e-6f ? inter / union : 0f;
+        }
+
+        /// <summary>
         /// landmarker のローカル正規化座標 (0..1, 0..1) を、入力画像の正規化座標 (0..1) に戻す。
         /// </summary>
         /// <remarks>
