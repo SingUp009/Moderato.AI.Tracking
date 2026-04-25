@@ -154,10 +154,64 @@ namespace Moderato.AI.Tracking.Processor
             using var scoresCpu = (Tensor<float>)await m_DetectorWorker.PeekOutput(1).ReadbackAndCloneAsync();
             cancellationToken.ThrowIfCancellationRequested();
 
-            // ---- 3) CPU 側で argmax → 1 体のみ採用 ----
+            // ---- 3) CPU 側で argmax + ROI 計算 ----
+            // ReadOnlySpan<T> は ref struct なので async メソッドのローカルにできない (CS4012)。
+            // よって Span を扱う処理はすべて同期ヘルパに切り出し、await をまたがない区間に閉じる。
+            bool valid = TryDecodeRoi(scoresCpu, boxesCpu, m_Anchors, k_DetectorInputSize,
+                out float bestScore, out RotatedRect roi);
+            m_LastDetectionScore = bestScore;
+
+            // 信頼度が低ければ無効フレームとして返す。閾値は MediaPipe のデフォルト 0.5。
+            if (!valid)
+            {
+                m_HasValidDetection = false;
+                return new PoseFrame(m_Landmarks, bestScore, false);
+            }
+
+            // ---- 4) ROI を 256×256 RT にクロップ Blit ----
+            //
+            // 入力 frame は任意サイズ。detector への入力では 224×224 にスケール済み。
+            // ここでは「入力 frame 上の正規化座標」での ROI を計算し、Blit の scale/offset で軸沿いクロップする。
+            // 厳密な回転クロップは後の改善で対応（CLAUDE.md 規約：都度コミットで段階的に進める）。
+            BlitRoi(frame, m_RoiTexture, in roi, k_DetectorInputSize);
+
+            // ---- 5) ROI RT → landmarker 入力 Tensor ----
+            TextureConverter.ToTensor(m_RoiTexture, m_LandmarkerInput, m_LandmarkerTransform);
+
+            // ---- 6) landmarker を Schedule ----
+            m_LandmarkerWorker.Schedule(m_LandmarkerInput);
+            using var landmarksCpu = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(0).ReadbackAndCloneAsync();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // ---- 7) 33 点を pre-allocated 配列に展開（同期ヘルパに委譲）----
+            DecodeLandmarks(landmarksCpu, in roi, k_DetectorInputSize, k_LandmarkerInputSize, m_Landmarks);
+
+            m_HasValidDetection = true;
+            return new PoseFrame(m_Landmarks, bestScore, true);
+        }
+
+        // ----------------------------------------------------------------------
+        // 同期ヘルパ群。ReadOnlySpan<T> を async メソッドのローカルにできない
+        // (CS4012) ため、Span を触る処理はすべてここに集約する。
+        // すべて static で副作用なし（出力は引数経由）。
+        // ----------------------------------------------------------------------
+
+        /// <summary>
+        /// detector 出力テンソルから最良検出を選び、ROI まで導出する。
+        /// </summary>
+        /// <returns>有効な検出があれば true。false なら出力は default。</returns>
+        static bool TryDecodeRoi(
+            Tensor<float> scores,
+            Tensor<float> boxes,
+            PoseAnchor[] anchors,
+            float inputSize,
+            out float bestScore,
+            out RotatedRect roi)
+        {
+            ReadOnlySpan<float> scoresSpan = scores.AsReadOnlySpan();
+
             // CPU 直接参照の Span を取り（DownloadToArray は GC alloc するので使わない）、
             // 線形ループで argmax。LINQ / foreach も boxing の可能性があるため避ける。
-            ReadOnlySpan<float> scoresSpan = scoresCpu.AsReadOnlySpan();
             int bestIdx = -1;
             float bestRawScore = float.NegativeInfinity;
             for (int i = 0; i < scoresSpan.Length; i++)
@@ -165,43 +219,41 @@ namespace Moderato.AI.Tracking.Processor
                 float v = scoresSpan[i];
                 if (v > bestRawScore) { bestRawScore = v; bestIdx = i; }
             }
-            float bestScore = BlazeUtils.Sigmoid(bestRawScore);
-            m_LastDetectionScore = bestScore;
+            bestScore = BlazeUtils.Sigmoid(bestRawScore);
 
-            // 信頼度が低ければ無効フレームとして返す。閾値は MediaPipe のデフォルト 0.5。
-            if (bestIdx < 0 || bestIdx >= m_Anchors.Length || bestScore < 0.5f)
+            if (bestIdx < 0 || bestIdx >= anchors.Length || bestScore < 0.5f)
             {
-                m_HasValidDetection = false;
-                return new PoseFrame(m_Landmarks, bestScore, false);
+                roi = default;
+                return false;
             }
 
-            // ---- 4) box decode → ROI 計算 ----
             // boxes も Span 直参照。Slice は struct 操作のみで heap alloc なし。
-            ReadOnlySpan<float> boxesSpan = boxesCpu.AsReadOnlySpan();
-            int rawOffset = bestIdx * k_DetectorBoxStride;
-            ReadOnlySpan<float> rawSpan = boxesSpan.Slice(rawOffset, k_DetectorBoxStride);
-            var anchor = m_Anchors[bestIdx];
+            ReadOnlySpan<float> boxesSpan = boxes.AsReadOnlySpan();
+            ReadOnlySpan<float> rawSpan = boxesSpan.Slice(bestIdx * k_DetectorBoxStride, k_DetectorBoxStride);
+            var anchor = anchors[bestIdx];
 
             BlazeUtils.DecodeBox(
                 rawSpan,
                 anchor.CenterX, anchor.CenterY,
-                k_DetectorInputSize,
+                inputSize,
                 out _, out _, out _, out _,
                 out float midHipX, out float midHipY,
                 out float fullBodyX, out float fullBodyY);
 
-            // RotatedRect は landmark の射影で使う。クロップ自体は M5 では軸沿いに簡略化。
-            var roi = BlazeUtils.MakeRoi(midHipX, midHipY, fullBodyX, fullBodyY);
+            roi = BlazeUtils.MakeRoi(midHipX, midHipY, fullBodyX, fullBodyY);
+            return true;
+        }
 
-            // ---- 5) ROI を 256×256 RT にクロップ Blit ----
-            //
-            // 入力 frame は任意サイズ。detector への入力では 224×224 にスケール済み。
-            // ここでは「入力 frame 上の正規化座標」での ROI を計算し、Blit の scale/offset で軸沿いクロップする。
-            // 厳密な回転クロップは後の改善で対応（CLAUDE.md 規約：都度コミットで段階的に進める）。
+        /// <summary>
+        /// 検出された ROI を src から dst に軸沿いでクロップする（Blit）。
+        /// 回転は <see cref="DecodeLandmarks"/> 側で出力座標に適用する。
+        /// </summary>
+        static void BlitRoi(RenderTexture src, RenderTexture dst, in RotatedRect roi, float inputSize)
+        {
             float roiSize = Mathf.Max(roi.Width, roi.Height);
-            float roiHalfNorm = (roiSize * 0.5f) / k_DetectorInputSize;
-            float roiCenterUNorm = roi.CenterX / k_DetectorInputSize;
-            float roiCenterVNorm = 1f - (roi.CenterY / k_DetectorInputSize); // Blit の V 軸は下原点
+            float roiHalfNorm = (roiSize * 0.5f) / inputSize;
+            float roiCenterUNorm = roi.CenterX / inputSize;
+            float roiCenterVNorm = 1f - (roi.CenterY / inputSize); // Blit の V 軸は下原点
 
             float u0 = Mathf.Clamp01(roiCenterUNorm - roiHalfNorm);
             float v0 = Mathf.Clamp01(roiCenterVNorm - roiHalfNorm);
@@ -209,41 +261,37 @@ namespace Moderato.AI.Tracking.Processor
             float vSize = Mathf.Min(roiHalfNorm * 2f, 1f - v0);
 
             // Graphics.Blit(src, dst, scale, offset) — ホットパスで GC alloc を出さないオーバーロード。
-            Graphics.Blit(frame, m_RoiTexture,
+            Graphics.Blit(src, dst,
                 new Vector2(uSize, vSize),
                 new Vector2(u0, v0));
+        }
 
-            // ---- 6) ROI RT → landmarker 入力 Tensor ----
-            TextureConverter.ToTensor(m_RoiTexture, m_LandmarkerInput, m_LandmarkerTransform);
-
-            // ---- 7) landmarker を Schedule ----
-            m_LandmarkerWorker.Schedule(m_LandmarkerInput);
-            using var landmarksCpu = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(0).ReadbackAndCloneAsync();
-            cancellationToken.ThrowIfCancellationRequested();
-
-            // ---- 8) 33 点を pre-allocated 配列に展開 ----
-            // landmarker 出力 (1, N) で N = keypoints * 5。最初の 33 点だけ使う。
-            // ローカル座標 (0..256) を入力画像正規化座標 (0..1) に戻すため、
-            // RotatedRect で射影する。
-            ReadOnlySpan<float> lmSpan = landmarksCpu.AsReadOnlySpan();
-            float lmInputSize = k_LandmarkerInputSize;
+        /// <summary>
+        /// landmarker 出力 (1, N) を 33 点 <see cref="PoseKeypoint"/> に展開し、
+        /// ROI で逆射影して入力画像正規化座標に戻す。
+        /// </summary>
+        static void DecodeLandmarks(
+            Tensor<float> landmarks,
+            in RotatedRect roi,
+            float detectorInputSize,
+            float landmarkerInputSize,
+            PoseKeypoint[] dst)
+        {
+            ReadOnlySpan<float> lmSpan = landmarks.AsReadOnlySpan();
             for (int i = 0; i < TrackingConstants.PoseLandmarkCount; i++)
             {
                 int o = i * k_LandmarkerAttrCount;
-                float lx = lmSpan[o + 0] / lmInputSize;
-                float ly = lmSpan[o + 1] / lmInputSize;
-                float lz = lmSpan[o + 2] / lmInputSize;
+                float lx = lmSpan[o + 0] / landmarkerInputSize;
+                float ly = lmSpan[o + 1] / landmarkerInputSize;
+                float lz = lmSpan[o + 2] / landmarkerInputSize;
                 float visibility = BlazeUtils.Sigmoid(lmSpan[o + 3]);
                 float presence = BlazeUtils.Sigmoid(lmSpan[o + 4]);
 
                 // 入力画像座標へ射影（rotation はここで適用）。
-                Vector2 projected = BlazeUtils.ProjectLandmark(lx, ly, in roi, k_DetectorInputSize);
+                Vector2 projected = BlazeUtils.ProjectLandmark(lx, ly, in roi, detectorInputSize);
 
-                m_Landmarks[i] = new PoseKeypoint(projected.x, projected.y, lz, visibility, presence);
+                dst[i] = new PoseKeypoint(projected.x, projected.y, lz, visibility, presence);
             }
-
-            m_HasValidDetection = true;
-            return new PoseFrame(m_Landmarks, bestScore, true);
         }
 
         /// <summary>直近 <see cref="DetectAsync"/> の検出スコア。Profiler / デバッグ用。</summary>
