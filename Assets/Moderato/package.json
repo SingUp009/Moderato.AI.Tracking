@@ -1,0 +1,15 @@
+{
+    "name": "com.singup_009.moderato.ai.tracking",
+    "displayName": "Moderato.AI.Tracking",
+    "author": {
+        "name": "SingUp_009",
+        "email": "009singup@gmail.com"
+    },
+    "version": "0.1.0",
+    "unity": "6000.0",
+    "description": "Realtime pose / hand / face tracking in Unity using Sentis (ONNX).",
+    "dependencies": {
+        "com.unity.ai.inference": "2.6.1"
+    },
+    "license": "MIT"
+}
