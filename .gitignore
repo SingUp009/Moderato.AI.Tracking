@@ -108,3 +108,15 @@ InitTestScene*.unity*
 
 # Claude Code session state (user-specific)
 /.claude/
+
+# Moderato.AI.Tracking — ML model binaries are NOT committed.
+# 利用者が HuggingFace から手動 DL して配置する運用（Models/README.md 参照）。
+# サイズが大きく (合計 数百 MB) Apache-2.0 のためソース URL 参照で十分。
+/Assets/Moderato/AI/Tracking/Models/*.onnx
+/Assets/Moderato/AI/Tracking/Models/*.onnx.meta
+/Assets/Moderato/AI/Tracking/Models/*.sentis
+/Assets/Moderato/AI/Tracking/Models/*.sentis.meta
+/Assets/Moderato/AI/Tracking/Models/*.tflite
+/Assets/Moderato/AI/Tracking/Models/*.tflite.meta
+/Assets/Moderato/AI/Tracking/Models/*.pb
+/Assets/Moderato/AI/Tracking/Models/*.pb.meta

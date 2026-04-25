@@ -17,11 +17,13 @@
 //   検出器が示す傾きはランドマーク座標に反映される。
 //   厳密な回転クロップは後続コミットでカスタムシェーダ Blit に置き換え予定。
 //
-// 必要な同梱物（Models/ に配置、ユーザーが手動 DL）：
-//   - pose_detection.sentis        : detector 本体 (input 1×224×224×3)
-//   - pose_landmarker_full.sentis  : landmarker 本体 (input 1×256×256×3)
-//   - pose_anchors.csv             : 2254 行の anchor 定義
-// 詳細は Models/README.md を参照。
+// 必要な同梱物（Models/ に配置、ユーザーが HuggingFace から手動 DL）：
+//   - pose_detection.onnx                 : detector 本体 (input 1×224×224×3)
+//   - pose_landmarks_detector_*.onnx      : landmarker 本体 (input 1×256×256×3)
+//                                           lite / full / heavy のいずれか
+//   - anchors.csv                         : 2254 行の anchor 定義
+// 詳細は Models/README.md を参照。Sentis は .onnx / .sentis 両対応。
+// .onnx 自体はサイズが大きい（合計数百 MB）ため git 管理外（.gitignore）。
 
 using System;
 using System.Threading;

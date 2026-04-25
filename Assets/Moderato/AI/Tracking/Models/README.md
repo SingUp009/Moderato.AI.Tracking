@@ -1,40 +1,51 @@
 # Moderato.AI.Tracking — Models
 
-このディレクトリには Sentis 形式（`.sentis`）に変換済みのモデル本体と、
-detector が使う anchor 定義 CSV を配置する。**ファイル本体はリポジトリに含めず、
-利用者が HuggingFace から手動でダウンロードして配置する**運用とする。
+このディレクトリには推論モデル本体と、detector が使う anchor 定義 CSV を配置する。
 
-すべて Apache-2.0 で配布されている Unity 公式変換済みアセットを使用する。
-ダウンロードしたら **Git LFS** で管理される（リポジトリルートの `.gitattributes` で
-`*.sentis` / `*.onnx` / `*.tflite` / `*.pb` が LFS 対象に設定済み）。
+## 方針
+
+- **モデル本体（`.onnx` / `.sentis` / `.tflite` / `.pb`）はリポジトリに含めない。**
+  リポジトリルートの `.gitignore` で `Assets/Moderato/AI/Tracking/Models/*.{onnx,sentis,tflite,pb}` と
+  対応する `.meta` を git 管理対象から除外している。
+  - 理由：合計サイズが数百 MB に達し、Apache-2.0 で配布されているソース（HuggingFace）への
+    URL 参照で十分なため。LFS でも consumer 側の Git URL UPM import で大量 DL を強制する
+    必要がない。
+- **`anchors.csv` は git 管理する。** 80 KB 程度の小さなテキストデータで、コードが
+  動作するために必須の anchor 定義（detector の出力チャンネル位置）であるため。
+- 利用者は下記手順で本体を **手動 DL** して配置する。
+
+すべて Sentis（`Unity.InferenceEngine`）の `ModelAsset` として読み込めるため、
+`.onnx` のままで問題なく動作する（必要に応じて `.sentis` に変換してキャッシュも可）。
 
 ## ポーズ（M5）
 
 ソース：[`unity/sentis-blaze-pose`](https://huggingface.co/unity/sentis-blaze-pose)
+（Apache-2.0、Unity 公式変換済みアセット）
 
 このディレクトリ直下に以下を配置：
 
-| ファイル名 | 内容 | 推定サイズ |
-|---|---|---|
-| `pose_detection.sentis` | BlazePose detector（入力 1×224×224×3、出力 boxes (1,2254,12) + scores (1,2254,1)） | 〜2 MB |
-| `pose_landmarker_full.sentis` | BlazePose landmarker Full（入力 1×256×256×3、出力 (1, 195) ＝39 keypoints×5 のうち先頭 33 点を使用） | 〜10 MB |
-| `pose_anchors.csv` | detector の 2254 anchor 定義（`cx,cy,w,h` 1 行 1 anchor） | 〜80 KB |
+| ファイル名 | 内容 | 推定サイズ | git 管理 |
+|---|---|---|---|
+| `pose_detection.onnx` | BlazePose detector（入力 1×224×224×3、出力 boxes (1,2254,12) + scores (1,2254,1)） | 〜15 MB | ❌ 除外 |
+| `pose_landmarks_detector_lite.onnx` | landmarker Lite（軽量・速度優先） | 〜5 MB | ❌ 除外 |
+| `pose_landmarks_detector_full.onnx` | landmarker Full（バランス） | 〜13 MB | ❌ 除外 |
+| `pose_landmarks_detector_heavy.onnx` | landmarker Heavy（精度優先） | 〜53 MB | ❌ 除外 |
+| `anchors.csv` | detector の 2254 anchor 定義（`cx,cy,w,h` 1 行 1 anchor） | 〜80 KB | ✅ 含める |
 
-軽量化したい場合は `pose_landmarker_lite.sentis` に差し替え可能（Lite/Full は
-PoseLandmarker 側で出力形状が一致していれば動作する）。
+`pose_landmarks_detector_*.onnx` は 3 種類のうち 1 つを選んで使えばよい。
+推奨は最初は `lite`、安定したら `full` に切り替え。`heavy` は単独 60fps を諦めるなら可。
 
 ### 配置後の手順
 
-1. 上記 3 ファイルを `Assets/Moderato/AI/Tracking/Models/` に置く
+1. 上記から必要な `.onnx` を `Assets/Moderato/AI/Tracking/Models/` に置く
 2. Unity Editor で Project ウィンドウをリフレッシュ（自動でインポートされる）
-3. `pose_anchors.csv` は `TextAsset` として読み込まれる（拡張子 `.csv` を `.txt` にリネームする必要はない。
-   Unity は `.csv` を `TextAsset` として扱う）
-4. `PoseLandmarker` のコンストラクタ引数として 3 つを渡す：
+3. `anchors.csv` は `TextAsset` として読み込まれる
+4. `PoseLandmarker` のコンストラクタ引数として渡す：
    ```csharp
    var pose = new PoseLandmarker(
-       detector:    poseDetectionAsset,
-       landmarker:  poseLandmarkerAsset,
-       anchorsCsv:  poseAnchorsCsv,
+       detector:    poseDetectionAsset,    // pose_detection.onnx
+       landmarker:  poseLandmarkerAsset,   // pose_landmarks_detector_*.onnx
+       anchorsCsv:  anchorsCsv,            // anchors.csv
        backend:     SentisBackendFactory.ResolveBest());
    ```
 
