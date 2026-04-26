@@ -49,7 +49,7 @@ namespace Moderato.AI.Tracking.Processor
         const int   k_MaxHands       = 2;     // TrackingConstants.MaxHandCount
         const float k_DetectThresh   = 0.5f;  // palm detector のシグモイド閾値
         const float k_PresenceThresh = 0.5f;  // landmark model presence 閾値
-        const float k_NmsIouThresh   = 0.3f;  // NMS IoU 閾値
+        const float k_NmsIouThresh   = 0.5f;  // NMS IoU 閾値（両手が隣接しても検出できるよう緩和）
         // BlazeHand の ROI スケール。MediaPipe 標準は 2.6（BlazePose の 1.25 より大きい）。
         const float k_RoiScale       = 2.6f;
 
@@ -181,9 +181,10 @@ namespace Moderato.AI.Tracking.Processor
 
             using var lm0   = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(0).ReadbackAndCloneAsync();
             cancellationToken.ThrowIfCancellationRequested();
-            using var hand0 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(1).ReadbackAndCloneAsync();
+            // tf2onnx 変換後: Index1=presence(hand_flag), Index2=handedness, Index3=world_landmarks(未使用)
+            using var pres0 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(1).ReadbackAndCloneAsync();
             cancellationToken.ThrowIfCancellationRequested();
-            using var pres0 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(2).ReadbackAndCloneAsync();
+            using var hand0 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(2).ReadbackAndCloneAsync();
             cancellationToken.ThrowIfCancellationRequested();
 
             m_Result[0] = DecodeLandmarkResult(
@@ -201,9 +202,9 @@ namespace Moderato.AI.Tracking.Processor
 
             using var lm1   = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(0).ReadbackAndCloneAsync();
             cancellationToken.ThrowIfCancellationRequested();
-            using var hand1 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(1).ReadbackAndCloneAsync();
+            using var pres1 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(1).ReadbackAndCloneAsync();
             cancellationToken.ThrowIfCancellationRequested();
-            using var pres1 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(2).ReadbackAndCloneAsync();
+            using var hand1 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(2).ReadbackAndCloneAsync();
             cancellationToken.ThrowIfCancellationRequested();
 
             m_Result[1] = DecodeLandmarkResult(
@@ -349,9 +350,14 @@ namespace Moderato.AI.Tracking.Processor
             if (presenceScore < presenceThresh)
                 return new HandFrame(dst, Handedness.Unknown, palmDetectionScore, presenceScore, false);
 
-            // handedness: raw logit。MediaPipe では >=0 → Right（カメラ画像基準）。
+            // handedness: BlazeHand の出力は sigmoid 後の [0,1] スコア。カメラ視点で判定。
+            // 未ミラーの WebCamTexture（カメラの右 = ユーザーの左）では Left/Right が反転するため
+            // ここでユーザー視点に変換する。[0.3, 0.7] の曖昧域は Unknown とし毎フレームの揺れを防ぐ。
             float handednessRaw = handedness.AsReadOnlySpan()[0];
-            var   hand          = handednessRaw >= 0f ? Handedness.Right : Handedness.Left;
+            Handedness hand;
+            if      (handednessRaw > 0.7f) hand = Handedness.Left;    // カメラ右(>0.7) = ユーザー左
+            else if (handednessRaw < 0.3f) hand = Handedness.Right;   // カメラ左(<0.3) = ユーザー右
+            else                           hand = Handedness.Unknown;  // 曖昧域はスキップ
 
             ReadOnlySpan<float> lmSpan = landmarks.AsReadOnlySpan();
             for (int i = 0; i < k_LandmarkCount; i++)

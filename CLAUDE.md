@@ -58,3 +58,82 @@ Web カメラ映像から人間の **ポーズ（BlazePose, 33 点）/ 手（Han
 - Profiler の `GC Alloc / frame` がゼロ
 - 目標 30 fps が Windows / macOS で維持できている
 - 3 モダリティ（ポーズ・手・顔）が同時に動作している
+
+---
+
+## 実装進捗
+
+### 完成済みマイルストーン
+
+| M# | 内容 | ブランチ / コミット |
+|---|---|---|
+| M5 | BlazePose 33 点ポーズ推定 | `main` (f0a10da 以前) |
+| M6 | BlazeHand 21 点 × 両手（NMS）推定 | `main` (9b6fe21) |
+| M7 | BlazeFace + FaceMesh 468 点顔推定 | `main` (0710b70〜) |
+
+### M7 実装で判明した座標系の罠（次回参照用）
+
+**モデル変換**
+- `tensorflow` は Python 3.12+ では入らない。`tflite2onnx`（TF 不要）で代替可能：
+  ```
+  pip install tflite2onnx onnx
+  python -c "import tflite2onnx; tflite2onnx.convert('face_landmark.tflite', 'face_landmark.onnx')"
+  ```
+- `tflite2onnx` は TFLite の **Y=0=画像上端（標準画像座標）** をそのまま保持する。
+- Unity 公式 HuggingFace モデル（hand / pose）は Unity の **Y=0=テクスチャ下端** 慣習に合わせて変換済みのため Y 反転不要。
+
+**tflite2onnx 変換モデルの Y 反転**
+- `DecodeLandmarks` 内で `ly = 1f - raw_y / landmarkerInputSize` が必要。
+- `ProjectLandmark` は `roi.CenterY`（Y=0=top ピクセル空間）を使うが、反転後の `ly` を渡しても
+  `OnGUI` 側の `(1f - lm.Y) * Screen.height` と合わせて結果的に正しく表示される。
+
+**WebCamTexture の X 方向とモデルごとの差異**
+- `WebCamTexture` の表示は（前面カメラでは）**ミラー表示**になる。
+- **Hand モデル（Unity HuggingFace）**：ランドマーク X は非ミラー空間で出力される。
+  → `HandTrackingDemo` の OnGUI / GL 描画で `1f - X` の反転が**必要**。
+- **Hand モデル（tf2onnx 変換 full 版）**：Y 反転不要。X 反転（`1f - X`）が必要。Unity HF モデルと同じ挙動。
+- **Face モデル（tflite2onnx 変換）**：ランドマーク X はミラー表示と同じ空間で出力される。
+  → `FaceTrackingDemo` の描画で `1f - X` の反転は**不要**（`lm.X * Screen.width` のみ）。
+- モデルの出所（Unity 公式変換 / tflite2onnx / tf2onnx）によって X・Y 慣習が異なる。追加モデルを組み込む際は実測で確認すること。
+
+**MakeFaceRoi の回転符号**
+- 正しい式（MediaPipe 準拠）：`rotation = Mathf.Atan2(-dy, dx)`
+- `-(Mathf.Atan2(-dy, dx))` と書くと符号が逆になり、頭を傾けるとランドマークが逆方向に傾く。
+- `MakeRoi`（BlazePose 用）は `-π/2` オフセットあり・符号は同様なので別物として扱うこと。
+
+**検出閾値**
+- `k_DetectThresh = 0.5f` が MediaPipe デフォルト。`0.75f` は高すぎて頻繁に検出が途切れる。
+
+**Hand モデルのモデル同一性（M6→"Full" 切り替え検証）**
+- `palm_detection_full.onnx`（tf2onnx 変換）と `hand_detector.onnx`（Unity HF lite）は**実質同一**（ファイルサイズ差 4 バイトのみ、同一入力で完全に同じ出力）。
+- `hand_landmark_full.onnx` と `hand_landmarks_detector.onnx` も**実質同一**（差 7 バイト）。
+- 「full に切り替えたら挙動が変わった」場合、モデル側の問題ではなくコード側のバグを疑うこと。
+
+**handedness 出力の型（post-sigmoid [0,1]）**
+- BlazeHand の handedness / presence 出力は **sigmoid 適用済みの [0,1] 値**で出力される。
+- raw logit と誤解して `< -0.5f` で Right 判定すると**永遠に true にならず、右手が常に Unknown** になるバグが生じる。
+- 正しい判定：`handednessRaw > 0.7f → Left（カメラ右）`、`< 0.3f → Right（カメラ左）`、それ以外 Unknown。
+
+**NMS IoU 閾値**
+- `k_NmsIouThresh = 0.3f` は厳しすぎ、両手が隣接すると 2 本目が suppressed される。
+- `0.5f` に緩和すると 2 本目検出率が改善する。
+
+---
+
+## 今後の計画
+
+### M8：3 モダリティ統合（TrackingService）
+- `PoseLandmarker` / `HandLandmarker` / `FaceLandmarker` を 1 つの `TrackingService` に束ねる。
+- 各 Processor を並列スケジュール（`Worker.Schedule` は GPU 非同期なのでフレーム内に複数発行可能）。
+- 公開 API 案：`TrackingService.DetectAsync(RenderTexture) → TrackingFrame`
+
+### M9：アバター適用
+- `FaceFrame.Landmarks` → ARKit 52 Blendshape パラメータへの変換（表情推定）。
+- `PoseFrame.Landmarks` → VRM / Humanoid ボーン回転への変換。
+- `HandFrame.Landmarks` → 指 IK / ハンドシェイプ分類。
+
+### 未検証・残タスク
+- Profiler で GC Alloc / frame = 0 の実測確認（M7 以降未実施）。
+- macOS での動作確認（`GPUCompute` → `GPUPixel` フォールバックの挙動含む）。
+- ~~`HandTrackingDemo` の X 方向が正しく重なっているか実測確認。~~ → 確認済み（`1f - X` が必要）
+- `FaceTrackingDemo.unity` シーン（Inspector アセット割り当て）の設定手順を README に追記。
