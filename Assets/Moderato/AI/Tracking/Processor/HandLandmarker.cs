@@ -314,12 +314,13 @@ namespace Moderato.AI.Tracking.Processor
                 raw,
                 anchor.CenterX, anchor.CenterY,
                 inputSize,
-                out _, out _, out _, out _,          // box center / size（未使用）
-                out float wristX, out float wristY,  // kp0 = 手首
-                out float mcpX,   out float mcpY);   // kp1 = 中指 MCP
+                out float boxCx, out float boxCy, out _, out _,  // ボックス中心を ROI 中心に使う
+                out float wristX, out float wristY,               // kp0 = 手首
+                out float mcpX,   out float mcpY);                // kp1 = MCP
 
-            // BlazeHand の ROI スケール 2.6（BlazePose の 1.25 より大きい）
-            return BlazeUtils.MakeRoi(wristX, wristY, mcpX, mcpY, k_RoiScale);
+            // MakeHandRoi: ROI 中心 = ボックス中心、回転 = Atan2(-dy,dx)（-π/2 オフセットなし）
+            // MakeRoi（BlazePose 用）は -π/2 オフセットを持つため手では約 90° のズレが生じる。
+            return BlazeUtils.MakeHandRoi(boxCx, boxCy, wristX, wristY, mcpX, mcpY, k_RoiScale);
         }
 
         /// <summary>

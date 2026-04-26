@@ -126,9 +126,31 @@ namespace Moderato.AI.Tracking.Core
         {
             float dx = leftEyeX - rightEyeX;
             float dy = leftEyeY - rightEyeY;
-            // 水平基準（上向き = 0 ラジアン）。BlazePose と異なり π/2 オフセットなし。
-            float rotation = -(Mathf.Atan2(-dy, dx));
+            // MediaPipe 準拠：atan2(-(y1-y0), x1-x0)。BlazePose の -π/2 オフセットなし。
+            float rotation = Mathf.Atan2(-dy, dx);
             float side = Mathf.Max(boxWidth, boxHeight) * scaleFactor;
+            return new RotatedRect(boxCenterX, boxCenterY, side, side, rotation);
+        }
+
+        /// <summary>
+        /// BlazeHand が出した「ボックス中心」と「手首 (kp0) / MCP (kp1)」から
+        /// HandLandmarker 入力用の RotatedRect（正方形・2.6 倍マージン）を作る。
+        /// <para>
+        /// 回転は手首 → MCP の方向から算出。<see cref="MakeFaceRoi"/> と同じ構造で
+        /// BlazePose 用の -π/2 オフセットは持たない。
+        /// </para>
+        /// </summary>
+        public static RotatedRect MakeHandRoi(
+            float boxCenterX, float boxCenterY,
+            float wristX,  float wristY,
+            float mcpX,    float mcpY,
+            float scaleFactor = 2.6f)
+        {
+            float dx = mcpX - wristX;
+            float dy = mcpY - wristY;
+            float rotation = Mathf.Atan2(-dy, dx); // MakeFaceRoi と同じ式。-π/2 オフセットなし。
+            float distance = Mathf.Sqrt(dx * dx + dy * dy);
+            float side = 2f * distance * scaleFactor;
             return new RotatedRect(boxCenterX, boxCenterY, side, side, rotation);
         }
 

@@ -118,6 +118,13 @@ Web カメラ映像から人間の **ポーズ（BlazePose, 33 点）/ 手（Han
 - `k_NmsIouThresh = 0.3f` は厳しすぎ、両手が隣接すると 2 本目が suppressed される。
 - `0.5f` に緩和すると 2 本目検出率が改善する。
 
+**Hand ROI の回転バグ（MakeRoi vs MakeHandRoi）**
+- `DecodeHandRoi` が BlazePose 用 `MakeRoi`（`-(Atan2(-dy,dx)) - π/2`）を流用していたため2つのバグがあった：
+  1. **ROI 中心 = 手首**（正しくはボックス中心 = 手のひら中心）
+  2. **回転式に -π/2 オフセット付き** → 手が真上を向くとき約 90° のズレが ProjectLandmark に生じる
+- 左右非対称な症状（左手 OK、右手が 90° ずれ）は、左右でインデックス MCP の wrist からの dx 符号が逆になるため回転誤差量が異なることに起因。
+- 修正：`BlazeUtils.MakeHandRoi` を追加（`MakeFaceRoi` と同構造）。ROI 中心 = ボックス中心、回転 = `Atan2(-dy, dx)`（オフセットなし）。`DecodeHandRoi` はこれを使う。
+
 ---
 
 ## 今後の計画
