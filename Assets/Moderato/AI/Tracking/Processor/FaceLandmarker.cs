@@ -246,7 +246,9 @@ namespace Moderato.AI.Tracking.Processor
             {
                 int   o  = i * k_LandmarkAttrCount;
                 float lx = lmSpan[o + 0] / landmarkerInputSize;
-                float ly = lmSpan[o + 1] / landmarkerInputSize;
+                // tflite2onnx は Y=0=画像上端（標準画像座標）で出力する。
+                // Unity の TextureConverter は Y=0=テクスチャ下端で動作するため反転が必要。
+                float ly = 1f - lmSpan[o + 1] / landmarkerInputSize;
                 float lz = lmSpan[o + 2];
                 Vector2 p = BlazeUtils.ProjectLandmark(lx, ly, in roi, detectorInputSize);
                 dst[i] = new FaceKeypoint(p.x, p.y, lz);
