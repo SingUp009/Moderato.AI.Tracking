@@ -111,6 +111,28 @@ namespace Moderato.AI.Tracking.Core
         }
 
         /// <summary>
+        /// BlazeFace が出した「ボックス中心」と「右目 (kp0) / 左目 (kp1)」から
+        /// FaceLandmarker 入力用の RotatedRect（正方形・1.5 倍マージン）を作る。
+        /// <para>
+        /// 回転は右目 → 左目の水平方向の傾きから算出（BlazePose の π/2 オフセットはなし）。
+        /// </para>
+        /// </summary>
+        public static RotatedRect MakeFaceRoi(
+            float boxCenterX, float boxCenterY,
+            float boxWidth,   float boxHeight,
+            float rightEyeX,  float rightEyeY,
+            float leftEyeX,   float leftEyeY,
+            float scaleFactor = 1.5f)
+        {
+            float dx = leftEyeX - rightEyeX;
+            float dy = leftEyeY - rightEyeY;
+            // 水平基準（上向き = 0 ラジアン）。BlazePose と異なり π/2 オフセットなし。
+            float rotation = -(Mathf.Atan2(-dy, dx));
+            float side = Mathf.Max(boxWidth, boxHeight) * scaleFactor;
+            return new RotatedRect(boxCenterX, boxCenterY, side, side, rotation);
+        }
+
+        /// <summary>
         /// 2 つの <see cref="RotatedRect"/> の軸沿い IoU（Intersection over Union）を計算する。
         /// 回転は無視する。Hand NMS など、矩形がほぼ正立している場面での抑制に使用。
         /// </summary>

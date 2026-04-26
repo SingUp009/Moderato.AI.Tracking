@@ -181,4 +181,91 @@ namespace Moderato.AI.Tracking
             IsValid        = isValid;
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Face Landmark (M7)
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// MediaPipe FaceMesh 468 点の主要ランドマーク名。
+    /// <para>
+    /// <see cref="LeftIrisCenter"/> と <see cref="RightIrisCenter"/> は
+    /// with_attention モデル（478 点）でのみ有効。基本モデルでは範囲外になる。
+    /// </para>
+    /// </summary>
+    public enum FaceLandmark
+    {
+        UpperLipTop       = 0,
+        NoseTip           = 4,
+        Forehead          = 10,
+        LowerLipBottom    = 17,
+        NoseBottom        = 94,
+        Chin              = 152,
+        LeftEyeOuter      = 33,
+        LeftEyeInner      = 133,
+        LeftEyeTop        = 159,
+        LeftEyeBottom     = 145,
+        LeftEyebrowOuter  = 46,
+        LeftEyebrowInner  = 107,
+        MouthLeft         = 78,
+        UpperLipCenter    = 13,
+        LowerLipCenter    = 14,
+        RightEyeOuter     = 263,
+        RightEyeInner     = 362,
+        RightEyeTop       = 386,
+        RightEyeBottom    = 374,
+        RightEyebrowOuter = 276,
+        RightEyebrowInner = 336,
+        MouthRight        = 308,
+        LeftIrisCenter    = 468,  // with_attention モデルのみ（478 点版）
+        RightIrisCenter   = 473,  // with_attention モデルのみ（478 点版）
+    }
+
+    /// <summary>
+    /// 顔ランドマーク 1 点の正規化座標。
+    /// </summary>
+    public readonly struct FaceKeypoint
+    {
+        public readonly float X;
+        public readonly float Y;
+        /// <summary>深度。ROI サイズ相対のピクセル単位（正規化なし）。</summary>
+        public readonly float Z;
+
+        public FaceKeypoint(float x, float y, float z)
+        {
+            X = x; Y = y; Z = z;
+        }
+
+        public Vector2 ToVector2() => new Vector2(X, Y);
+        public Vector3 ToVector3() => new Vector3(X, Y, Z);
+    }
+
+    /// <summary>
+    /// 1 フレーム分の顔検出結果（単一顔）。
+    /// <para>
+    /// <see cref="Landmarks"/> は内部バッファの参照。フレームをまたいでキャッシュしないこと。
+    /// </para>
+    /// </summary>
+    public readonly struct FaceFrame
+    {
+        /// <summary>468 点ランドマーク（入力画像正規化座標）。<see cref="IsValid"/> が false のとき内容は未定義。</summary>
+        public readonly FaceKeypoint[] Landmarks;
+
+        /// <summary>BlazeFace detector のシグモイドスコア。</summary>
+        public readonly float DetectionScore;
+
+        /// <summary>Face landmark モデルの presence スコア（face_flag、シグモイド適用済み）。</summary>
+        public readonly float PresenceScore;
+
+        /// <summary>有効な検出かどうか。</summary>
+        public readonly bool IsValid;
+
+        public FaceFrame(FaceKeypoint[] landmarks, float detectionScore, float presenceScore, bool isValid)
+        {
+            Landmarks      = landmarks;
+            DetectionScore = detectionScore;
+            PresenceScore  = presenceScore;
+            IsValid        = isValid;
+        }
+    }
 }
