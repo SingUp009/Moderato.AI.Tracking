@@ -12,7 +12,7 @@
 // - ReadOnlySpan<T> は async メソッドのローカルにできない (CS4012) ため、
 //   Span を触る処理はすべて同期ヘルパに切り出す。
 // - 2 手検出は O(2N) 2 パス NMS で 0 alloc 実現（BlazeUtils.ComputeIoU 使用）。
-// - ROI クロップは軸沿い（rotation 0）正方形。回転は DecodeLandmarks 側で適用。
+// - ROI クロップは軸沿い（rotation 0）正方形。ProjectLandmark も rotation=0 で整合させる。
 //
 // 必要な同梱物（Models/ に配置、HuggingFace から手動 DL）：
 //   - palm_detection_lite.onnx        : palm detector (input 1×192×192×3)
@@ -360,6 +360,10 @@ namespace Moderato.AI.Tracking.Processor
             else if (handednessRaw < 0.3f) hand = Handedness.Right;   // カメラ左(<0.3) = ユーザー右
             else                           hand = Handedness.Unknown;  // 曖昧域はスキップ
 
+            // BlitRoi は軸沿い（回転なし）クロップ。ProjectLandmark も rotation=0 で使わないと
+            // roi.Rotation（手が直立なら≈π/2）が逆変換に混入し 90° ズレが生じる。
+            var axisRoi = new RotatedRect(roi.CenterX, roi.CenterY, roi.Width, roi.Height, 0f);
+
             ReadOnlySpan<float> lmSpan = landmarks.AsReadOnlySpan();
             for (int i = 0; i < k_LandmarkCount; i++)
             {
@@ -368,7 +372,7 @@ namespace Moderato.AI.Tracking.Processor
                 float ly = lmSpan[o + 1] / landmarkerInputSize;
                 float lz = lmSpan[o + 2]; // 深度はピクセル単位のまま保持
 
-                Vector2 projected = BlazeUtils.ProjectLandmark(lx, ly, in roi, detectorInputSize);
+                Vector2 projected = BlazeUtils.ProjectLandmark(lx, ly, in axisRoi, detectorInputSize);
                 dst[i] = new HandKeypoint(projected.x, projected.y, lz);
             }
 
@@ -377,7 +381,7 @@ namespace Moderato.AI.Tracking.Processor
 
         /// <summary>
         /// 検出された ROI を src から dst に軸沿いでクロップする（Blit）。
-        /// 回転は <see cref="DecodeLandmarkResult"/> 側の射影で適用する。
+        /// 回転は適用しない。<see cref="DecodeLandmarkResult"/> の射影も <c>rotation=0</c> で整合させること。
         /// </summary>
         static void BlitRoi(RenderTexture src, RenderTexture dst, in RotatedRect roi, float inputSize)
         {

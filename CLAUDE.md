@@ -125,6 +125,12 @@ Web カメラ映像から人間の **ポーズ（BlazePose, 33 点）/ 手（Han
 - 左右非対称な症状（左手 OK、右手が 90° ずれ）は、左右でインデックス MCP の wrist からの dx 符号が逆になるため回転誤差量が異なることに起因。
 - 修正：`BlazeUtils.MakeHandRoi` を追加（`MakeFaceRoi` と同構造）。ROI 中心 = ボックス中心、回転 = `Atan2(-dy, dx)`（オフセットなし）。`DecodeHandRoi` はこれを使う。
 
+**BlitRoi と ProjectLandmark の整合性（rotation=0 必須）**
+- `BlitRoi` は **軸沿い（回転なし）クロップ**。`roi.Rotation` を Blit に適用していない。
+- `ProjectLandmark` に非ゼロの `roi.Rotation`（例：手が直立なら≈π/2）を渡すと、クロップ座標の Y オフセットが回転行列でX方向に混入し **90° ズレ**が生じる（face では回転≈0 なので誤差が小さく表面化しにくい）。
+- 修正：`DecodeLandmarkResult` 内で `ProjectLandmark` に渡す ROI は `rotation=0` に固定した `axisRoi` を使う（実際のクロップが回転していないため）。
+- `MakeHandRoi` が計算する回転情報は将来の回転 Blit 実装のために保持する。
+
 ---
 
 ## 今後の計画
