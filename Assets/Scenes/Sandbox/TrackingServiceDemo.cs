@@ -171,7 +171,7 @@ public class TrackingServiceDemo : MonoBehaviour
         }
 
         // ---- Pose ドット（可視性 >= 0.5 のみ）----
-        // Y は bottom-origin。OnGUI は top-origin なので (1f - Y) で変換。
+        // Y は top-origin（0=上端）。OnGUI も top-origin なのでそのまま Y * Height。
         if (m_LastResult.HasPose)
         {
             GUI.color = new Color(1f, 0.6f, 0f, 0.8f);
@@ -180,12 +180,12 @@ public class TrackingServiceDemo : MonoBehaviour
             {
                 if (lm[i].Visibility < 0.5f) continue;
                 float px = lm[i].X * Screen.width;
-                float py = (1f - lm[i].Y) * Screen.height;
+                float py = lm[i].Y * Screen.height;
                 GUI.Box(new Rect(px - 3f, py - 3f, 6f, 6f), string.Empty);
             }
         }
 
-        // ---- Hand ドット（手：Y は bottom-origin → (1f - Y) で OnGUI 変換）----
+        // ---- Hand ドット（Y は top-origin → OnGUI はそのまま Y * Height）----
         if (m_LastResult.Hands != null)
         {
             for (int h = 0; h < m_LastResult.Hands.Length; h++)
@@ -197,7 +197,7 @@ public class TrackingServiceDemo : MonoBehaviour
                 for (int i = 0; i < lm.Length; i++)
                 {
                     float px = lm[i].X * Screen.width;
-                    float py = (1f - lm[i].Y) * Screen.height;
+                    float py = lm[i].Y * Screen.height;
                     GUI.Box(new Rect(px - 4f, py - 4f, 8f, 8f), string.Empty);
                 }
             }
@@ -225,7 +225,7 @@ public class TrackingServiceDemo : MonoBehaviour
         GL.LoadOrtho();
         GL.Begin(GL.LINES);
 
-        // Pose: X ミラー補正(1f-X)、Y は bottom-origin で GL と一致。
+        // Pose: X ミラー補正(1f-X)、Y は top-origin なので 1f-Y で GL 反転。
         // 可視性 < 0.5 の接続（画外の足・腰）はスキップして画面全体への誤描画を防ぐ。
         if (m_LastResult.HasPose)
         {
@@ -236,12 +236,12 @@ public class TrackingServiceDemo : MonoBehaviour
                 int ia = k_PoseConnections[ci].a;
                 int ib = k_PoseConnections[ci].b;
                 if (lm[ia].Visibility < 0.5f || lm[ib].Visibility < 0.5f) continue;
-                GL.Vertex3(1f - lm[ia].X, lm[ia].Y, 0f);
-                GL.Vertex3(1f - lm[ib].X, lm[ib].Y, 0f);
+                GL.Vertex3(1f - lm[ia].X, 1f - lm[ia].Y, 0f);
+                GL.Vertex3(1f - lm[ib].X, 1f - lm[ib].Y, 0f);
             }
         }
 
-        // Hand: X ミラー補正(1f-X)、Y は top-origin
+        // Hand: X ミラー補正(1f-X)、Y は top-origin なので 1f-Y で GL 反転
         if (m_LastResult.Hands != null)
         {
             for (int h = 0; h < m_LastResult.Hands.Length; h++)
@@ -254,8 +254,8 @@ public class TrackingServiceDemo : MonoBehaviour
                 {
                     int ia = k_HandConnections[ci].a;
                     int ib = k_HandConnections[ci].b;
-                    GL.Vertex3(1f - lm[ia].X, lm[ia].Y, 0f);
-                    GL.Vertex3(1f - lm[ib].X, lm[ib].Y, 0f);
+                    GL.Vertex3(1f - lm[ia].X, 1f - lm[ia].Y, 0f);
+                    GL.Vertex3(1f - lm[ib].X, 1f - lm[ib].Y, 0f);
                 }
             }
         }

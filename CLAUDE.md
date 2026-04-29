@@ -134,16 +134,12 @@ Web カメラ映像から人間の **ポーズ（BlazePose, 33 点）/ 手（Han
 - 修正：`DecodeLandmarkResult` 内で `ProjectLandmark` に渡す ROI は `rotation=0` に固定した `axisRoi` を使う（実際のクロップが回転していないため）。
 - `MakeHandRoi` が計算する回転情報は将来の回転 Blit 実装のために保持する。
 
-### M8 実装で判明した座標系の未解決問題
+### M8 実装で確定した座標系まとめ
 
-**Hand / Pose ランドマークの Y 軸表示が上下反転する**
-- `FaceKeypoint` は `ly = 1f - raw_y / size`（bottom-origin）で確定済み。表示は `(1f - Y) * Height`（OnGUI）/ `Y`（GL）。
-- `HandKeypoint` / `PoseKeypoint` の Y は実測上**まだ上下反転が解消されていない**（`ly = raw_y / size` のまま）。
-- 試すべき候補：
-  1. **デコーダ修正案**：`HandLandmarker.DecodeLandmarkResult` / `PoseLandmarker.DecodeLandmarks` で `ly = 1f - raw_y / size` に変更し、OnGUI 表示は `(1f - Y) * Height`、GL は `Y` のまま（Face と同じパターン）。
-  2. **表示修正案**：デコーダはそのまま。GL を `GL.Vertex3(1f - X, 1f - Y, 0f)` に変更し、OnGUI は `Y * Height`（元に戻す）。
-- CLAUDE.md 旧記録「Y 反転不要（Unity HF モデルは Y=0=下端慣習）」は、旧 `MakeRoi`（rotation≈-π）が Y を偶然打ち消していた誤認の可能性が高い。修正後の挙動とドキュメントが一致するまで **実測優先**。
-- 調査後に判明した正解を `AGENT.md` の「座標系リファレンス」に記録すること。
+**Hand / Pose ランドマーク Y 軸：top-origin（0=上端）と確定**
+- AlterEgo の `KpToVec` / `HkToVec` が `-kp.Y` を使用（3D 変換で符号反転）→ top-origin の証明。
+- 正しい表示：OnGUI は `Y * Height`（そのまま）、GL は `GL.Vertex3(1f - X, 1f - Y, 0f)`（Y 反転）。
+- Face（tflite2onnx）は別物（bottom-origin、デコーダで `1f - raw/size`）。モデル出所によって慣習が異なる点に注意。
 
 ---
 
@@ -155,8 +151,8 @@ Web カメラ映像から人間の **ポーズ（BlazePose, 33 点）/ 手（Han
 - `HandFrame.Landmarks` → 指 IK / ハンドシェイプ分類。
 
 ### 未検証・残タスク
-- **Hand / Pose の Y 軸反転を解消する**（上記「M8 実装で判明した座標系の未解決問題」参照）。
 - Profiler で GC Alloc / frame = 0 の実測確認（M7 以降未実施）。
 - macOS での動作確認（`GPUCompute` → `GPUPixel` フォールバックの挙動含む）。
 - ~~`HandTrackingDemo` の X 方向が正しく重なっているか実測確認。~~ → 確認済み（`1f - X` が必要）
+- ~~Hand / Pose の Y 軸反転を解消する。~~ → 確認済み（OnGUI=`Y*H`、GL=`1f-Y`）
 - `FaceTrackingDemo.unity` / `TrackingServiceDemo.unity` シーン（Inspector アセット割り当て）の設定手順を README に追記。

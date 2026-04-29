@@ -87,41 +87,12 @@ FaceFrame   face  = await faceLandmarker.DetectAsync(rt, ct);
 | Hand landmark X | 非ミラー空間 | `HandTrackingDemo` GL で `1f - X` 補正が必要と確認済み |
 | Face OnGUI 描画 | `px = X * W`、`py = (1f - Y) * H` | 正常表示確認済み |
 | Face GL 描画 | `GL.Vertex3(X, Y, 0f)` | X 補正なし、Y は GL bottom-origin と一致 |
-| Hand GL 描画 | `GL.Vertex3(1f - X, Y, 0f)` | X ミラー補正のみ、Y は GL と一致 |
-
-### 未解決（M8 時点）
-
-**Hand / Pose の Y 軸表示が上下反転する問題**
-
-現在の実装:
-- デコーダ: `ly = raw_y / landmarkerInputSize`（反転なし）
-- `HandTrackingDemo` / `TrackingServiceDemo` OnGUI: `py = (1f - lm[i].Y) * Screen.height`
-- GL: `GL.Vertex3(1f - X, Y, 0f)`
-
-上記設定でも表示が上下反転する。調査すべき 2 候補:
-
-**候補 A — デコーダで反転（Face と同一パターン）**
-```csharp
-// HandLandmarker.DecodeLandmarkResult / PoseLandmarker.DecodeLandmarks 内
-float ly = 1f - lmSpan[o + 1] / landmarkerInputSize;  // ← 1f - を追加
-// 表示側は現行のまま: OnGUI (1f - Y)*H、GL Y のまま
-```
-
-**候補 B — 表示側のみ変更（デコーダはそのまま）**
-```csharp
-// デコーダは変更なし
-// OnGUI: py = lm[i].Y * Screen.height;        ← (1f - Y) をやめる
-// GL:    GL.Vertex3(1f - X, 1f - Y, 0f);      ← Y を反転
-```
-
-**実測手順**（修正前後で確認する）:
-1. 手を画面**上部**に出す → wrist が下・指先が上に正しく重なれば正解
-2. `FaceTrackingDemo` の顔 overlay と同じ高さに hand が重なるかクロスチェック
-3. Y ログ出力: `GUI.Label(..., $"Y={lm[0].Y:F3}")` で手を上下に動かし値の増減方向を確認
-   - 上に動いて Y 増加 → bottom-origin → 候補 A が正解
-   - 上に動いて Y 減少 → top-origin → 候補 B が正解
-
-**正解が判明したらこのセクションを「確定済み」に移動し、候補を削除すること。**
+| Hand landmark Y | **top-origin**（0=上端、1=下端） | AlterEgo の `HkToVec` が `-kp.Y` を使用していることで確認（bottom-origin なら `+kp.Y`） |
+| Pose landmark Y | **top-origin**（0=上端、1=下端） | AlterEgo の `KpToVec` が `-kp.Y` を使用していることで確認 |
+| Hand OnGUI 描画 | `px = X * W`、`py = Y * H` | top-origin で OnGUI と一致するためそのまま |
+| Pose OnGUI 描画 | `px = X * W`、`py = Y * H`（visibility >= 0.5 のみ） | 同上 |
+| Hand GL 描画 | `GL.Vertex3(1f - X, 1f - Y, 0f)` | X ミラー補正 + Y を 1f- で top→bottom 変換 |
+| Pose GL 描画 | `GL.Vertex3(1f - X, 1f - Y, 0f)` | 同上 |
 
 ---
 
@@ -166,27 +137,22 @@ var face  = await fa;
 
 ---
 
-## 実装状態（M8 時点、commit 6a42336）
+## 実装状態
 
 | # | 内容 | 状態 |
 |---|---|---|
 | M5 | BlazePose 33 点ポーズ推定 | ✅ 完了 |
 | M6 | BlazeHand 21 点 × 両手（NMS） | ✅ 完了 |
 | M7 | BlazeFace + FaceMesh 468 点 | ✅ 完了 |
-| M8 | TrackingService 統合・TrackingFrame 公開 API | ✅ 完了（Y バグ残存） |
-| — | Hand / Pose Y 軸表示反転の修正 | 🔴 未解決（上記参照） |
+| M8 | TrackingService 統合・TrackingFrame 公開 API | ✅ 完了 |
+| — | Hand / Pose Y 軸表示反転の修正 | ✅ 完了（候補 B: OnGUI=`Y*H`、GL=`1f-Y`） |
 | M9 | アバター適用（Blendshape / VRM ボーン / 指 IK） | 📋 未着手 |
 
 ---
 
 ## 次のアクション候補
 
-### 優先度 高：Y 軸表示反転の修正
-1. `HandLandmarker.DecodeLandmarkResult`（line 367）と `PoseLandmarker.DecodeLandmarks` の `ly` を `1f - raw / size` に変更（候補 A）して Play テスト
-2. 改善しない場合は候補 B（GL `1f - Y`、OnGUI を元の `Y * H` に戻す）を試す
-3. 正解を本ドキュメントの「確定済み」テーブルに書き込む
-
-### 優先度 中：M9 アバター適用
+### 優先度 高：M9 アバター適用
 - `FaceFrame.Landmarks` → ARKit 52 Blendshape（Jaw, Eye, Brow など）
 - `PoseFrame.Landmarks` → VRM Humanoid ボーン回転（T-pose 基準の相対回転）
 - `HandFrame.Landmarks` → 指 IK / FingerPose 分類
