@@ -70,6 +70,7 @@ Web カメラ映像から人間の **ポーズ（BlazePose, 33 点）/ 手（Han
 | M5 | BlazePose 33 点ポーズ推定 | `main` (f0a10da 以前) |
 | M6 | BlazeHand 21 点 × 両手（NMS）推定 | `main` (9b6fe21) |
 | M7 | BlazeFace + FaceMesh 468 点顔推定 | `main` (0710b70〜) |
+| M8 | TrackingService 3 モダリティ統合・TrackingFrame 公開 API | `main` (6a42336) |
 
 ### M7 実装で判明した座標系の罠（次回参照用）
 
@@ -91,7 +92,9 @@ Web カメラ映像から人間の **ポーズ（BlazePose, 33 点）/ 手（Han
 - `WebCamTexture` の表示は（前面カメラでは）**ミラー表示**になる。
 - **Hand モデル（Unity HuggingFace）**：ランドマーク X は非ミラー空間で出力される。
   → `HandTrackingDemo` の OnGUI / GL 描画で `1f - X` の反転が**必要**。
-- **Hand モデル（tf2onnx 変換 full 版）**：Y 反転不要。X 反転（`1f - X`）が必要。Unity HF モデルと同じ挙動。
+  X・Y ともに `TextureConverter.ToTensor` が GPU→Tensor で変換する際に反転するため、`DecodeLandmarkResult` 内で `lx = 1f - raw_x / size`・`ly = 1f - raw_y / size` が**必要**（FaceLandmarker の ly と同構造、ただし lx も必要な点が異なる）。
+  当初「Y 反転不要」と記録していたが、これは旧 `MakeRoi`（rotation≈-π）が cos(-π)=-1・sin(-π)=0 で X・Y を偶然打ち消していたための誤認。
+- **Hand モデル（tf2onnx 変換 full 版）**：Unity HF モデルと同じ挙動（lx・ly ともに `1f -` 補正が必要）。
 - **Face モデル（tflite2onnx 変換）**：ランドマーク X はミラー表示と同じ空間で出力される。
   → `FaceTrackingDemo` の描画で `1f - X` の反転は**不要**（`lm.X * Screen.width` のみ）。
 - モデルの出所（Unity 公式変換 / tflite2onnx / tf2onnx）によって X・Y 慣習が異なる。追加モデルを組み込む際は実測で確認すること。
@@ -131,14 +134,20 @@ Web カメラ映像から人間の **ポーズ（BlazePose, 33 点）/ 手（Han
 - 修正：`DecodeLandmarkResult` 内で `ProjectLandmark` に渡す ROI は `rotation=0` に固定した `axisRoi` を使う（実際のクロップが回転していないため）。
 - `MakeHandRoi` が計算する回転情報は将来の回転 Blit 実装のために保持する。
 
+### M8 実装で判明した座標系の未解決問題
+
+**Hand / Pose ランドマークの Y 軸表示が上下反転する**
+- `FaceKeypoint` は `ly = 1f - raw_y / size`（bottom-origin）で確定済み。表示は `(1f - Y) * Height`（OnGUI）/ `Y`（GL）。
+- `HandKeypoint` / `PoseKeypoint` の Y は実測上**まだ上下反転が解消されていない**（`ly = raw_y / size` のまま）。
+- 試すべき候補：
+  1. **デコーダ修正案**：`HandLandmarker.DecodeLandmarkResult` / `PoseLandmarker.DecodeLandmarks` で `ly = 1f - raw_y / size` に変更し、OnGUI 表示は `(1f - Y) * Height`、GL は `Y` のまま（Face と同じパターン）。
+  2. **表示修正案**：デコーダはそのまま。GL を `GL.Vertex3(1f - X, 1f - Y, 0f)` に変更し、OnGUI は `Y * Height`（元に戻す）。
+- CLAUDE.md 旧記録「Y 反転不要（Unity HF モデルは Y=0=下端慣習）」は、旧 `MakeRoi`（rotation≈-π）が Y を偶然打ち消していた誤認の可能性が高い。修正後の挙動とドキュメントが一致するまで **実測優先**。
+- 調査後に判明した正解を `AGENT.md` の「座標系リファレンス」に記録すること。
+
 ---
 
 ## 今後の計画
-
-### M8：3 モダリティ統合（TrackingService）
-- `PoseLandmarker` / `HandLandmarker` / `FaceLandmarker` を 1 つの `TrackingService` に束ねる。
-- 各 Processor を並列スケジュール（`Worker.Schedule` は GPU 非同期なのでフレーム内に複数発行可能）。
-- 公開 API 案：`TrackingService.DetectAsync(RenderTexture) → TrackingFrame`
 
 ### M9：アバター適用
 - `FaceFrame.Landmarks` → ARKit 52 Blendshape パラメータへの変換（表情推定）。
@@ -146,7 +155,8 @@ Web カメラ映像から人間の **ポーズ（BlazePose, 33 点）/ 手（Han
 - `HandFrame.Landmarks` → 指 IK / ハンドシェイプ分類。
 
 ### 未検証・残タスク
+- **Hand / Pose の Y 軸反転を解消する**（上記「M8 実装で判明した座標系の未解決問題」参照）。
 - Profiler で GC Alloc / frame = 0 の実測確認（M7 以降未実施）。
 - macOS での動作確認（`GPUCompute` → `GPUPixel` フォールバックの挙動含む）。
 - ~~`HandTrackingDemo` の X 方向が正しく重なっているか実測確認。~~ → 確認済み（`1f - X` が必要）
-- `FaceTrackingDemo.unity` シーン（Inspector アセット割り当て）の設定手順を README に追記。
+- `FaceTrackingDemo.unity` / `TrackingServiceDemo.unity` シーン（Inspector アセット割り当て）の設定手順を README に追記。
