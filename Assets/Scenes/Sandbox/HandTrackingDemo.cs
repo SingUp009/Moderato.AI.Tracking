@@ -149,6 +149,7 @@ public class HandTrackingDemo : MonoBehaviour
             for (int i = 0; i < lm.Length; i++)
             {
                 float px = lm[i].X * Screen.width;
+                // Y は bottom-origin。OnGUI は top-origin なので (1f - Y) で変換。
                 float py = (1f - lm[i].Y) * Screen.height;
                 GUI.Box(new Rect(px - 5f, py - 5f, 10f, 10f), string.Empty);
             }
@@ -158,7 +159,7 @@ public class HandTrackingDemo : MonoBehaviour
 
         // ---- GL スケルトンライン（Repaint イベントのみ）----
         // GL.LoadOrtho() は (0,0)=左下 (1,1)=右上。
-        // ランドマーク Y は上→下なので (1 - Y) に反転する。
+        // ランドマーク X は 1f - X でミラー補正。Y は GL Y=0=下と相殺されるためそのまま。
         if (Event.current.type != EventType.Repaint || m_LineMaterial == null) return;
 
         GL.PushMatrix();
@@ -178,8 +179,8 @@ public class HandTrackingDemo : MonoBehaviour
             {
                 int ia = k_Connections[ci].a;
                 int ib = k_Connections[ci].b;
-                GL.Vertex3(lm[ia].X, lm[ia].Y, 0f);
-                GL.Vertex3(lm[ib].X, lm[ib].Y, 0f);
+                GL.Vertex3(1f - lm[ia].X, lm[ia].Y, 0f);
+                GL.Vertex3(1f - lm[ib].X, lm[ib].Y, 0f);
             }
         }
 

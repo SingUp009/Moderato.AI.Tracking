@@ -268,4 +268,39 @@ namespace Moderato.AI.Tracking
             IsValid        = isValid;
         }
     }
+
+    // -------------------------------------------------------------------------
+    // Unified Tracking Frame (M8)
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// 1 フレーム分の 3 モダリティ統合検出結果。
+    /// <para>
+    /// <see cref="Pose"/>, <see cref="Hands"/>, <see cref="Face"/> に含まれる配列は
+    /// 各 Processor 内部バッファの参照。フレームをまたいでキャッシュしないこと。
+    /// </para>
+    /// </summary>
+    public readonly struct TrackingFrame
+    {
+        /// <summary>ポーズ推定結果（33 点）。</summary>
+        public readonly PoseFrame Pose;
+
+        /// <summary>手ランドマーク結果（最大 2 手）。インデックス 0/1 が各手に対応する。</summary>
+        public readonly HandFrame[] Hands;
+
+        /// <summary>顔ランドマーク結果（468 点）。</summary>
+        public readonly FaceFrame Face;
+
+        public TrackingFrame(PoseFrame pose, HandFrame[] hands, FaceFrame face)
+        {
+            Pose  = pose;
+            Hands = hands;
+            Face  = face;
+        }
+
+        public bool HasPose    => Pose.IsValid;
+        /// <summary>Hands は常に 2 要素配列（HandLandmarker 内部バッファ）。null チェック不要。</summary>
+        public bool HasAnyHand => Hands[0].IsValid || Hands[1].IsValid;
+        public bool HasFace    => Face.IsValid;
+    }
 }
