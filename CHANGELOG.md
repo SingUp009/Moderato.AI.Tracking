@@ -1,6 +1,6 @@
 # Changelog
 
-## 2026-05-02
+## 0.2.2 - 2026-05-02
 
 ### Added
 - Added a rotated ROI blit shader for BlazeHand and wired it into `HandLandmarker` with an axis-aligned fallback.
