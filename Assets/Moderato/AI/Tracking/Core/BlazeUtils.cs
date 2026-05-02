@@ -55,6 +55,11 @@ namespace Moderato.AI.Tracking.Core
             return 1f / (1f + Mathf.Exp(-x));
         }
 
+        static float NormalizeRadians(float angle)
+        {
+            return angle - 2f * Mathf.PI * Mathf.Floor((angle + Mathf.PI) / (2f * Mathf.PI));
+        }
+
         /// <summary>
         /// BlazePose detector の anchor 1 本に対する box decode。
         /// <paramref name="raw"/> は (12,) ベクトル：cx,cy,w,h,kp0x,kp0y,...,kp3x,kp3y（offset 単位、anchor 相対）。
@@ -136,21 +141,29 @@ namespace Moderato.AI.Tracking.Core
         /// BlazeHand が出した「ボックス中心」と「手首 (kp0) / MCP (kp1)」から
         /// HandLandmarker 入力用の RotatedRect（正方形・2.6 倍マージン）を作る。
         /// <para>
-        /// 回転は手首 → MCP の方向から算出。<see cref="MakeFaceRoi"/> と同じ構造で
-        /// BlazePose 用の -π/2 オフセットは持たない。
+        /// 回転は MediaPipe Hands と同じく、手首 → MCP の線が ROI の Y 軸へ揃うように算出する。
         /// </para>
         /// </summary>
         public static RotatedRect MakeHandRoi(
             float boxCenterX, float boxCenterY,
+            float boxSize,
             float wristX,  float wristY,
             float mcpX,    float mcpY,
             float scaleFactor = 2.6f)
         {
             float dx = mcpX - wristX;
             float dy = mcpY - wristY;
-            float rotation = Mathf.Atan2(-dy, dx); // MakeFaceRoi と同じ式。-π/2 オフセットなし。
             float distance = Mathf.Sqrt(dx * dx + dy * dy);
-            float side = 2f * distance * scaleFactor;
+            float rotation = NormalizeRadians(Mathf.PI * 0.5f - Mathf.Atan2(dy, dx));
+
+            if (distance > 1e-6f)
+            {
+                float shift = 0.5f * boxSize / distance;
+                boxCenterX += dx * shift;
+                boxCenterY += dy * shift;
+            }
+
+            float side = boxSize * scaleFactor;
             return new RotatedRect(boxCenterX, boxCenterY, side, side, rotation);
         }
 
@@ -205,6 +218,33 @@ namespace Moderato.AI.Tracking.Core
             float ry = sx * sin + sy * cos;
 
             // ROI 中心へ加算してピクセル座標、最後に inputSize で正規化
+            float px = (roi.CenterX + rx) / inputSize;
+            float py = (roi.CenterY + ry) / inputSize;
+            return new Vector2(px, py);
+        }
+
+        /// <summary>
+        /// top-origin の landmarker ローカル座標を top-origin の入力画像座標へ戻す。
+        /// </summary>
+        public static Vector2 ProjectLandmarkTopOrigin(
+            float lx, float ly,
+            in RotatedRect roi,
+            float inputSize)
+        {
+            float cx = lx - 0.5f;
+            float cy = ly - 0.5f;
+
+            float sx = cx * roi.Width;
+            float sy = cy * roi.Height;
+
+            // Unity の BlazeHand サンプルと同じく、
+            // Translation(center) * Scale(scale, -scale) * Rotation(rotation)
+            // の順で landmarker 座標を入力画像座標へ戻す。
+            float cos = Mathf.Cos(roi.Rotation);
+            float sin = Mathf.Sin(roi.Rotation);
+            float rx = sx * cos - sy * sin;
+            float ry = -(sx * sin + sy * cos);
+
             float px = (roi.CenterX + rx) / inputSize;
             float py = (roi.CenterY + ry) / inputSize;
             return new Vector2(px, py);

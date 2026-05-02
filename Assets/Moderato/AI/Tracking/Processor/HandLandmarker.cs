@@ -12,7 +12,7 @@
 // - ReadOnlySpan<T> は async メソッドのローカルにできない (CS4012) ため、
 //   Span を触る処理はすべて同期ヘルパに切り出す。
 // - 2 手検出は O(2N) 2 パス NMS で 0 alloc 実現（BlazeUtils.ComputeIoU 使用）。
-// - ROI クロップは軸沿い（rotation 0）正方形。ProjectLandmark も rotation=0 で整合させる。
+// - ROI クロップは RotatedRect の回転を反映する。top-origin 用の逆射影も同じ回転で整合させる。
 //
 // 必要な同梱物（Models/ に配置、HuggingFace から手動 DL）：
 //   - palm_detection_lite.onnx        : palm detector (input 1×192×192×3)
@@ -39,7 +39,11 @@ namespace Moderato.AI.Tracking.Processor
     {
         // ---- palm detector -------------------------------------------------
         const int   k_PalmInputSize  = 192;
-        const int   k_PalmBoxStride  = 18;    // cx,cy,w,h, kp0x,kp0y,kp1x,kp1y, kp2..kp6(未使用)
+        const int   k_PalmBoxStride  = 18;    // cx,cy,w,h, kp0..kp6（各 x,y）
+        const int   k_PalmKeypointOffset = 4;
+        const int   k_PalmKeypointStride = 2;
+        const int   k_PalmWristIndex = 0;
+        const int   k_PalmMiddleMcpIndex = 2;
 
         // ---- hand landmark -------------------------------------------------
         const int   k_LandmarkerSize = 224;
@@ -47,11 +51,18 @@ namespace Moderato.AI.Tracking.Processor
 
         // ---- 検出パラメータ -----------------------------------------------
         const int   k_MaxHands       = 2;     // TrackingConstants.MaxHandCount
-        const float k_DetectThresh   = 0.5f;  // palm detector のシグモイド閾値
+        const float k_DetectThresh   = 0.35f; // palm detector のシグモイド閾値。Vサイン等の弱い palm も候補に残す。
         const float k_PresenceThresh = 0.5f;  // landmark model presence 閾値
         const float k_NmsIouThresh   = 0.5f;  // NMS IoU 閾値（両手が隣接しても検出できるよう緩和）
         // BlazeHand の ROI スケール。MediaPipe 標準は 2.6（BlazePose の 1.25 より大きい）。
         const float k_RoiScale       = 2.6f;
+        const float k_AxisFallbackScale = 1.15f;
+        const string k_RoiShaderResource = "Moderato.AI.Tracking/RotatedRoiBlit";
+        const string k_RoiShaderName = "Hidden/Moderato/AI/Tracking/RotatedRoiBlit";
+
+        static readonly int s_RoiShaderRoiId       = Shader.PropertyToID("_Roi");
+        static readonly int s_RoiShaderInputSizeId = Shader.PropertyToID("_InputSize");
+        static readonly int s_RoiShaderRotationId  = Shader.PropertyToID("_RoiRotation");
 
         readonly Worker m_PalmWorker;
         readonly Worker m_LandmarkerWorker;
@@ -59,6 +70,7 @@ namespace Moderato.AI.Tracking.Processor
         readonly Tensor<float> m_PalmInput;       // (1, 192, 192, 3)
         readonly Tensor<float> m_LandmarkerInput; // (1, 224, 224, 3)
         readonly RenderTexture m_RoiTexture;      // 224×224 共有（2 手分を逐次使い回す）
+        readonly Material m_RoiMaterial;           // 回転 ROI クロップ用（起動時 1 回だけ確保）
 
         readonly PoseAnchor[] m_Anchors;
 
@@ -71,6 +83,37 @@ namespace Moderato.AI.Tracking.Processor
 
         int  m_DetectedHandCount;
         bool m_Disposed;
+
+        readonly struct HandRoi
+        {
+            public readonly RotatedRect Rect;
+            public readonly RotatedRect AxisRect;
+            public readonly float WristX;
+            public readonly float WristY;
+            public readonly float MiddleMcpX;
+            public readonly float MiddleMcpY;
+
+            public HandRoi(
+                RotatedRect rect,
+                RotatedRect axisRect,
+                float wristX,
+                float wristY,
+                float middleMcpX,
+                float middleMcpY)
+            {
+                Rect       = rect;
+                AxisRect   = axisRect;
+                WristX     = wristX;
+                WristY     = wristY;
+                MiddleMcpX = middleMcpX;
+                MiddleMcpY = middleMcpY;
+            }
+
+            public HandRoi WithRect(RotatedRect rect)
+            {
+                return new HandRoi(rect, AxisRect, WristX, WristY, MiddleMcpX, MiddleMcpY);
+            }
+        }
 
         /// <summary>
         /// 各モデル・anchor を渡して構築する。
@@ -105,6 +148,24 @@ namespace Moderato.AI.Tracking.Processor
                 filterMode = FilterMode.Bilinear,
             };
             m_RoiTexture.Create();
+
+            var roiShader = Resources.Load<Shader>(k_RoiShaderResource);
+            if (roiShader == null)
+                roiShader = Shader.Find(k_RoiShaderName);
+
+            if (roiShader != null)
+            {
+                m_RoiMaterial = new Material(roiShader)
+                {
+                    hideFlags = HideFlags.HideAndDontSave,
+                };
+            }
+            else
+            {
+                Debug.LogWarning(
+                    "[Moderato.AI.Tracking] RotatedRoiBlit shader not found. " +
+                    "Hand ROI crop will fall back to axis-aligned mode.");
+            }
 
             m_Anchors = PoseAnchors.Load(palmAnchorsCsv.text);
             if (Mathf.Abs(m_Anchors.Length - 2016) > 100)
@@ -162,8 +223,8 @@ namespace Moderato.AI.Tracking.Processor
             int handCount = TryFindTopPalms(
                 scoresCpu, boxesCpu, m_Anchors, k_PalmInputSize,
                 k_DetectThresh, k_NmsIouThresh,
-                out float score0, out RotatedRect roi0,
-                out float score1, out RotatedRect roi1);
+                out float score0, out HandRoi roi0,
+                out float score1, out HandRoi roi1);
 
             m_DetectedHandCount = handCount;
 
@@ -175,44 +236,82 @@ namespace Moderato.AI.Tracking.Processor
                 return m_Result;
 
             // ---- 5) hand 0 の landmark 推論 ----
-            BlitRoi(frame, m_RoiTexture, in roi0, k_PalmInputSize);
-            TextureConverter.ToTensor(m_RoiTexture, m_LandmarkerInput, m_LandmarkerTransform);
-            m_LandmarkerWorker.Schedule(m_LandmarkerInput);
+            m_Result[0] = await RunHandLandmarkAsync(
+                frame, roi0, roi0.Rect,
+                useRotatedCrop: true,
+                score0, cancellationToken, m_Landmarks0);
 
-            using var lm0   = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(0).ReadbackAndCloneAsync();
-            cancellationToken.ThrowIfCancellationRequested();
-            // tf2onnx 変換後: Index1=presence(hand_flag), Index2=handedness, Index3=world_landmarks(未使用)
-            using var pres0 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(1).ReadbackAndCloneAsync();
-            cancellationToken.ThrowIfCancellationRequested();
-            using var hand0 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(2).ReadbackAndCloneAsync();
-            cancellationToken.ThrowIfCancellationRequested();
+            if (!m_Result[0].IsValid)
+            {
+                HandFrame fallback = await RunHandLandmarkAsync(
+                    frame, roi0, roi0.AxisRect,
+                    useRotatedCrop: false,
+                    score0, cancellationToken, m_Landmarks0);
 
-            m_Result[0] = DecodeLandmarkResult(
-                lm0, hand0, pres0, in roi0,
-                k_PalmInputSize, k_LandmarkerSize,
-                score0, k_PresenceThresh, m_Landmarks0);
+                if (fallback.PresenceScore >= m_Result[0].PresenceScore)
+                    m_Result[0] = fallback;
+            }
 
             if (handCount < 2)
                 return m_Result;
 
             // ---- 6) hand 1 の landmark 推論（ROI テクスチャ上書き、readback 済みなので安全） ----
-            BlitRoi(frame, m_RoiTexture, in roi1, k_PalmInputSize);
+            m_Result[1] = await RunHandLandmarkAsync(
+                frame, roi1, roi1.Rect,
+                useRotatedCrop: true,
+                score1, cancellationToken, m_Landmarks1);
+
+            if (!m_Result[1].IsValid)
+            {
+                HandFrame fallback = await RunHandLandmarkAsync(
+                    frame, roi1, roi1.AxisRect,
+                    useRotatedCrop: false,
+                    score1, cancellationToken, m_Landmarks1);
+
+                if (fallback.PresenceScore >= m_Result[1].PresenceScore)
+                    m_Result[1] = fallback;
+            }
+
+            SortHandsByScreenX(m_Result);
+            return m_Result;
+        }
+
+        async Awaitable<HandFrame> RunHandLandmarkAsync(
+            RenderTexture frame,
+            HandRoi roi,
+            RotatedRect cropRect,
+            bool useRotatedCrop,
+            float palmDetectionScore,
+            CancellationToken cancellationToken,
+            HandKeypoint[] dst)
+        {
+            bool useRoiRotation;
+            if (useRotatedCrop)
+            {
+                useRoiRotation = BlitRoi(frame, m_RoiTexture, in cropRect, k_PalmInputSize, m_RoiMaterial);
+            }
+            else
+            {
+                BlitAxisAlignedRoi(frame, m_RoiTexture, in cropRect, k_PalmInputSize);
+                useRoiRotation = false;
+            }
+
             TextureConverter.ToTensor(m_RoiTexture, m_LandmarkerInput, m_LandmarkerTransform);
             m_LandmarkerWorker.Schedule(m_LandmarkerInput);
 
-            using var lm1   = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(0).ReadbackAndCloneAsync();
+            using var lm = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(0).ReadbackAndCloneAsync();
             cancellationToken.ThrowIfCancellationRequested();
-            using var pres1 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(1).ReadbackAndCloneAsync();
+            // tf2onnx 変換後: Index1=presence(hand_flag), Index2=handedness, Index3=world_landmarks(未使用)
+            using var pres = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(1).ReadbackAndCloneAsync();
             cancellationToken.ThrowIfCancellationRequested();
-            using var hand1 = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(2).ReadbackAndCloneAsync();
+            using var hand = (Tensor<float>)await m_LandmarkerWorker.PeekOutput(2).ReadbackAndCloneAsync();
             cancellationToken.ThrowIfCancellationRequested();
 
-            m_Result[1] = DecodeLandmarkResult(
-                lm1, hand1, pres1, in roi1,
+            HandRoi projectionRoi = roi.WithRect(cropRect);
+            return DecodeLandmarkResult(
+                lm, hand, pres, in projectionRoi,
                 k_PalmInputSize, k_LandmarkerSize,
-                score1, k_PresenceThresh, m_Landmarks1);
-
-            return m_Result;
+                palmDetectionScore, k_PresenceThresh, useRoiRotation, dst);
         }
 
         // ----------------------------------------------------------------------
@@ -231,8 +330,8 @@ namespace Moderato.AI.Tracking.Processor
             float         inputSize,
             float         detectThresh,
             float         iouThresh,
-            out float      score0, out RotatedRect roi0,
-            out float      score1, out RotatedRect roi1)
+            out float      score0, out HandRoi roi0,
+            out float      score1, out HandRoi roi1)
         {
             ReadOnlySpan<float> scoresSpan = scores.AsReadOnlySpan();
             ReadOnlySpan<float> boxesSpan  = boxes.AsReadOnlySpan();
@@ -276,8 +375,8 @@ namespace Moderato.AI.Tracking.Processor
                 float sig = BlazeUtils.Sigmoid(raw);
                 if (sig < detectThresh) continue;
 
-                RotatedRect candidate = DecodeHandRoi(boxesSpan, anchors, i, inputSize);
-                if (BlazeUtils.ComputeIoU(in roi0, in candidate) >= iouThresh) continue;
+                HandRoi candidate = DecodeHandRoi(boxesSpan, anchors, i, inputSize);
+                if (BlazeUtils.ComputeIoU(in roi0.Rect, in candidate.Rect) >= iouThresh) continue;
 
                 if (raw > best2Raw)
                 {
@@ -300,7 +399,7 @@ namespace Moderato.AI.Tracking.Processor
         /// <summary>
         /// boxes スパンの i 番目エントリを <see cref="RotatedRect"/> に変換する。
         /// </summary>
-        static RotatedRect DecodeHandRoi(
+        static HandRoi DecodeHandRoi(
             ReadOnlySpan<float> boxesSpan,
             PoseAnchor[]        anchors,
             int                 idx,
@@ -314,13 +413,30 @@ namespace Moderato.AI.Tracking.Processor
                 raw,
                 anchor.CenterX, anchor.CenterY,
                 inputSize,
-                out float boxCx, out float boxCy, out _, out _,  // ボックス中心を ROI 中心に使う
-                out float wristX, out float wristY,               // kp0 = 手首
-                out float mcpX,   out float mcpY);                // kp1 = MCP
+                out float boxCx, out float boxCy,
+                out float boxW, out float boxH,
+                out _, out _,
+                out _, out _);
 
-            // MakeHandRoi: ROI 中心 = ボックス中心、回転 = Atan2(-dy,dx)（-π/2 オフセットなし）
-            // MakeRoi（BlazePose 用）は -π/2 オフセットを持つため手では約 90° のズレが生じる。
-            return BlazeUtils.MakeHandRoi(boxCx, boxCy, wristX, wristY, mcpX, mcpY, k_RoiScale);
+            int wristOffset = k_PalmKeypointOffset + k_PalmWristIndex * k_PalmKeypointStride;
+            float wristX = raw[wristOffset + 0] + anchor.CenterX * inputSize;
+            float wristY = raw[wristOffset + 1] + anchor.CenterY * inputSize;
+            int middleMcpOffset = k_PalmKeypointOffset + k_PalmMiddleMcpIndex * k_PalmKeypointStride;
+            float middleMcpX = raw[middleMcpOffset + 0] + anchor.CenterX * inputSize;
+            float middleMcpY = raw[middleMcpOffset + 1] + anchor.CenterY * inputSize;
+
+            // Unity BlazeHand サンプルと同じく、palm box の長辺を 2.6 倍し、
+            // 中心を wrist→middle MCP 方向へ 0.5*boxSize だけずらして指先側を含める。
+            float boxSize = Mathf.Max(boxW, boxH);
+            RotatedRect rect = BlazeUtils.MakeHandRoi(
+                boxCx, boxCy, boxSize, wristX, wristY, middleMcpX, middleMcpY, k_RoiScale);
+
+            // 回転ROIが landmarker の presence を落とす場合に備え、
+            // 少し広めの軸沿いROIを診断兼フォールバックとして保持する。
+            float axisSide = rect.Width * k_AxisFallbackScale;
+            var axisRect = new RotatedRect(rect.CenterX, rect.CenterY, axisSide, axisSide, 0f);
+
+            return new HandRoi(rect, axisRect, wristX, wristY, middleMcpX, middleMcpY);
         }
 
         /// <summary>
@@ -330,11 +446,12 @@ namespace Moderato.AI.Tracking.Processor
             Tensor<float> landmarks,
             Tensor<float> handedness,
             Tensor<float> presence,
-            in RotatedRect roi,
+            in HandRoi roi,
             float          detectorInputSize,
             float          landmarkerInputSize,
             float          palmDetectionScore,
             float          presenceThresh,
+            bool           useRoiRotation,
             HandKeypoint[] dst)
         {
             // shape アサート（出力インデックスのずれを早期検出）
@@ -345,8 +462,7 @@ namespace Moderato.AI.Tracking.Processor
             Debug.Assert(presence.shape[1] == 1,
                 $"[Moderato.AI.Tracking] presence output shape mismatch: shape[1]={presence.shape[1]}, expected 1");
 
-            float presenceRaw   = presence.AsReadOnlySpan()[0];
-            float presenceScore = BlazeUtils.Sigmoid(presenceRaw);
+            float presenceScore = presence.AsReadOnlySpan()[0];
 
             if (presenceScore < presenceThresh)
                 return new HandFrame(dst, Handedness.Unknown, palmDetectionScore, presenceScore, false);
@@ -360,9 +476,11 @@ namespace Moderato.AI.Tracking.Processor
             else if (handednessRaw < 0.3f) hand = Handedness.Right;   // カメラ左(<0.3) = ユーザー右
             else                           hand = Handedness.Unknown;  // 曖昧域はスキップ
 
-            // BlitRoi は軸沿い（回転なし）クロップ。ProjectLandmark も rotation=0 で使わないと
-            // roi.Rotation（手が直立なら≈π/2）が逆変換に混入し 90° ズレが生じる。
-            var axisRoi = new RotatedRect(roi.CenterX, roi.CenterY, roi.Width, roi.Height, 0f);
+            // 回転 ROI クロップが有効なときは同じ rotation で逆射影する。
+            // 軸沿いフォールバックは Graphics.Blit の矩形クロップなので、Y を追加反転しない射影を使う。
+            RotatedRect projectionRoi = useRoiRotation
+                ? roi.Rect
+                : new RotatedRect(roi.Rect.CenterX, roi.Rect.CenterY, roi.Rect.Width, roi.Rect.Height, 0f);
 
             ReadOnlySpan<float> lmSpan = landmarks.AsReadOnlySpan();
             for (int i = 0; i < k_LandmarkCount; i++)
@@ -372,18 +490,54 @@ namespace Moderato.AI.Tracking.Processor
                 float ly = lmSpan[o + 1] / landmarkerInputSize;
                 float lz = lmSpan[o + 2]; // 深度はピクセル単位のまま保持
 
-                Vector2 projected = BlazeUtils.ProjectLandmark(lx, ly, in axisRoi, detectorInputSize);
+                Vector2 projected = useRoiRotation
+                    ? BlazeUtils.ProjectLandmarkTopOrigin(lx, ly, in projectionRoi, detectorInputSize)
+                    : BlazeUtils.ProjectLandmark(lx, ly, in projectionRoi, detectorInputSize);
                 dst[i] = new HandKeypoint(projected.x, projected.y, lz);
             }
 
             return new HandFrame(dst, hand, palmDetectionScore, presenceScore, true);
         }
 
+        static void SortHandsByScreenX(HandFrame[] hands)
+        {
+            if (hands == null || hands.Length < 2) return;
+            if (!hands[0].IsValid || !hands[1].IsValid) return;
+
+            float x0 = hands[0].Landmarks[0].X;
+            float x1 = hands[1].Landmarks[0].X;
+            if (x0 <= x1) return;
+
+            (hands[0], hands[1]) = (hands[1], hands[0]);
+        }
+
         /// <summary>
-        /// 検出された ROI を src から dst に軸沿いでクロップする（Blit）。
-        /// 回転は適用しない。<see cref="DecodeLandmarkResult"/> の射影も <c>rotation=0</c> で整合させること。
+        /// 検出された ROI を src から dst に回転クロップする（Blit）。
+        /// シェーダが利用できない場合のみ軸沿いクロップへフォールバックする。
         /// </summary>
-        static void BlitRoi(RenderTexture src, RenderTexture dst, in RotatedRect roi, float inputSize)
+        /// <returns>回転クロップを適用できた場合 true。</returns>
+        static bool BlitRoi(
+            RenderTexture src,
+            RenderTexture dst,
+            in RotatedRect roi,
+            float inputSize,
+            Material roiMaterial)
+        {
+            if (roiMaterial == null)
+            {
+                BlitAxisAlignedRoi(src, dst, in roi, inputSize);
+                return false;
+            }
+
+            roiMaterial.SetVector(s_RoiShaderRoiId,
+                new Vector4(roi.CenterX, roi.CenterY, roi.Width, roi.Height));
+            roiMaterial.SetFloat(s_RoiShaderInputSizeId, inputSize);
+            roiMaterial.SetFloat(s_RoiShaderRotationId, roi.Rotation);
+            Graphics.Blit(src, dst, roiMaterial);
+            return true;
+        }
+
+        static void BlitAxisAlignedRoi(RenderTexture src, RenderTexture dst, in RotatedRect roi, float inputSize)
         {
             float roiSize      = Mathf.Max(roi.Width, roi.Height);
             float roiHalfNorm  = (roiSize * 0.5f) / inputSize;
@@ -403,6 +557,9 @@ namespace Moderato.AI.Tracking.Processor
         /// <summary>直近フレームで検出した手の数（0〜2）。デバッグ / Profiler 用。</summary>
         public int DetectedHandCount => m_DetectedHandCount;
 
+        /// <summary>直近の hand landmarker 入力 ROI。Sandbox 表示用。</summary>
+        public Texture DebugLastRoiTexture => m_RoiTexture;
+
         public void Dispose()
         {
             if (m_Disposed) return;
@@ -412,6 +569,9 @@ namespace Moderato.AI.Tracking.Processor
             m_LandmarkerWorker?.Dispose();
             m_PalmInput?.Dispose();
             m_LandmarkerInput?.Dispose();
+
+            if (m_RoiMaterial != null)
+                UnityEngine.Object.Destroy(m_RoiMaterial);
 
             if (m_RoiTexture != null)
             {
