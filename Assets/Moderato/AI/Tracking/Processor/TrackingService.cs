@@ -69,6 +69,9 @@ namespace Moderato.AI.Tracking.Processor
             return new TrackingFrame(pose, hands, face);
         }
 
+        /// <summary>直近の hand landmarker 入力 ROI。Sandbox 表示用。</summary>
+        public Texture DebugHandRoiTexture => m_Hand.DebugLastRoiTexture;
+
         public void Dispose()
         {
             if (m_Disposed) return;

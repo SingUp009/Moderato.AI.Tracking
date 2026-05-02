@@ -128,6 +128,8 @@ public class HandTrackingDemo : MonoBehaviour
                 m_WebcamTex, ScaleMode.StretchToFill, false);
         }
 
+        DrawRoiPreview();
+
         // ---- ステータスヘッダ ----
         GUI.color = Color.white;
         GUI.Label(new Rect(10f, 10f, 420f, 24f),
@@ -139,11 +141,15 @@ public class HandTrackingDemo : MonoBehaviour
         for (int h = 0; h < m_LastResult.Length; h++)
         {
             var frame = m_LastResult[h];
-            if (!frame.IsValid) continue;
 
-            GUI.color = k_HandColors[h % k_HandColors.Length];
+            bool hasSignal = frame.IsValid || frame.DetectionScore > 0f || frame.PresenceScore > 0f;
+            if (!hasSignal) continue;
+
+            GUI.color = frame.IsValid ? k_HandColors[h % k_HandColors.Length] : new Color(1f, 0.35f, 0.35f, 1f);
             GUI.Label(new Rect(10f, 38f + h * 22f, 420f, 22f),
-                $"Hand {h} | {frame.Hand} | det={frame.DetectionScore:F2} | pres={frame.PresenceScore:F2}");
+                $"Hand {h} | {(frame.IsValid ? frame.Hand.ToString() : "invalid")} | det={frame.DetectionScore:F2} | pres={frame.PresenceScore:F2}");
+
+            if (!frame.IsValid) continue;
 
             var lm = frame.Landmarks;
             for (int i = 0; i < lm.Length; i++)
@@ -159,7 +165,7 @@ public class HandTrackingDemo : MonoBehaviour
 
         // ---- GL スケルトンライン（Repaint イベントのみ）----
         // GL.LoadOrtho() は (0,0)=左下 (1,1)=右上。
-        // ランドマーク X は 1f - X でミラー補正。Y は top-origin（0=上端）なので 1f - Y で反転。
+        // X は OnGUI のドットと同じ。Y だけ top-origin（0=上端）から GL bottom-origin へ反転。
         if (Event.current.type != EventType.Repaint || m_LineMaterial == null) return;
 
         GL.PushMatrix();
@@ -179,13 +185,25 @@ public class HandTrackingDemo : MonoBehaviour
             {
                 int ia = k_Connections[ci].a;
                 int ib = k_Connections[ci].b;
-                GL.Vertex3(1f - lm[ia].X, 1f - lm[ia].Y, 0f);
-                GL.Vertex3(1f - lm[ib].X, 1f - lm[ib].Y, 0f);
+                GL.Vertex3(lm[ia].X, 1f - lm[ia].Y, 0f);
+                GL.Vertex3(lm[ib].X, 1f - lm[ib].Y, 0f);
             }
         }
 
         GL.End();
         GL.PopMatrix();
+    }
+
+    void DrawRoiPreview()
+    {
+        Texture roi = m_Landmarker != null ? m_Landmarker.DebugLastRoiTexture : null;
+        if (roi == null) return;
+
+        const float size = 160f;
+        var rect = new Rect(Screen.width - size - 10f, 10f, size, size);
+        GUI.color = Color.white;
+        GUI.DrawTexture(rect, roi, ScaleMode.StretchToFill, false);
+        GUI.Box(rect, "Hand ROI");
     }
 
     void OnDestroy()

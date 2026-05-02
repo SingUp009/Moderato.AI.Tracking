@@ -167,8 +167,7 @@ public class FaceTrackingDemo : MonoBehaviour
         GUI.color = new Color(0f, 1f, 0.5f, 0.7f);
         for (int i = 0; i < lm.Length; i++)
         {
-            // WebCamTexture は水平ミラー表示なので X を反転
-            float px = (1f - lm[i].X) * Screen.width;
+            float px = lm[i].X * Screen.width;
             float py = (1f - lm[i].Y) * Screen.height;
             GUI.Box(new Rect(px - 2f, py - 2f, 4f, 4f), string.Empty);
         }
@@ -176,8 +175,8 @@ public class FaceTrackingDemo : MonoBehaviour
 
         // ---- GL スケルトンライン（Repaint イベントのみ）----
         // GL.LoadOrtho() は (0,0)=左下 (1,1)=右上。
-        // ランドマーク Y=0 が上 / GL Y=0 が下 → Y はそのまま渡すと相殺。
-        // ランドマーク X は水平ミラー補正で (1 - X)。
+        // ランドマーク Y=0=下（DecodeLandmarks で反転済み）/ GL Y=0=下 → そのまま渡す。
+        // ランドマーク X は非ミラー（WebCamTexture と同空間）。
         if (Event.current.type != EventType.Repaint || m_LineMaterial == null) return;
 
         GL.PushMatrix();
@@ -205,8 +204,8 @@ public class FaceTrackingDemo : MonoBehaviour
         {
             var a = lm[indices[i]];
             var b = lm[indices[i + 1]];
-            GL.Vertex3(1f - a.X, a.Y, 0f);
-            GL.Vertex3(1f - b.X, b.Y, 0f);
+            GL.Vertex3(a.X, a.Y, 0f);
+            GL.Vertex3(b.X, b.Y, 0f);
         }
     }
 

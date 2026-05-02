@@ -161,6 +161,8 @@ public class TrackingServiceDemo : MonoBehaviour
             GUI.DrawTexture(new Rect(0f, 0f, Screen.width, Screen.height),
                 m_WebcamTex, ScaleMode.StretchToFill, false);
 
+        DrawHandRoiPreview();
+
         if (m_ShowDebug)
         {
             GUI.color = Color.white;
@@ -191,8 +193,18 @@ public class TrackingServiceDemo : MonoBehaviour
             for (int h = 0; h < m_LastResult.Hands.Length; h++)
             {
                 var hf = m_LastResult.Hands[h];
+                bool hasSignal = hf.IsValid || hf.DetectionScore > 0f || hf.PresenceScore > 0f;
+                if (!hasSignal) continue;
+
+                GUI.color = hf.IsValid ? k_HandColors[h % k_HandColors.Length] : new Color(1f, 0.35f, 0.35f, 1f);
+                if (m_ShowDebug)
+                {
+                    GUI.Label(new Rect(10f, 34f + h * 20f, 520f, 20f),
+                        $"Hand {h} | {(hf.IsValid ? hf.Hand.ToString() : "invalid")} | det={hf.DetectionScore:F2} | pres={hf.PresenceScore:F2}");
+                }
+
                 if (!hf.IsValid) continue;
-                GUI.color = k_HandColors[h % k_HandColors.Length];
+
                 var lm = hf.Landmarks;
                 for (int i = 0; i < lm.Length; i++)
                 {
@@ -241,7 +253,7 @@ public class TrackingServiceDemo : MonoBehaviour
             }
         }
 
-        // Hand: X ミラー補正(1f-X)、Y は top-origin なので 1f-Y で GL 反転
+        // Hand: X は OnGUI のドットと同じ、Y は top-origin なので 1f-Y で GL 反転
         if (m_LastResult.Hands != null)
         {
             for (int h = 0; h < m_LastResult.Hands.Length; h++)
@@ -254,8 +266,8 @@ public class TrackingServiceDemo : MonoBehaviour
                 {
                     int ia = k_HandConnections[ci].a;
                     int ib = k_HandConnections[ci].b;
-                    GL.Vertex3(1f - lm[ia].X, 1f - lm[ia].Y, 0f);
-                    GL.Vertex3(1f - lm[ib].X, 1f - lm[ib].Y, 0f);
+                    GL.Vertex3(lm[ia].X, 1f - lm[ia].Y, 0f);
+                    GL.Vertex3(lm[ib].X, 1f - lm[ib].Y, 0f);
                 }
             }
         }
@@ -272,6 +284,18 @@ public class TrackingServiceDemo : MonoBehaviour
 
         GL.End();
         GL.PopMatrix();
+    }
+
+    void DrawHandRoiPreview()
+    {
+        Texture roi = m_Service != null ? m_Service.DebugHandRoiTexture : null;
+        if (roi == null) return;
+
+        const float size = 160f;
+        var rect = new Rect(Screen.width - size - 10f, 10f, size, size);
+        GUI.color = Color.white;
+        GUI.DrawTexture(rect, roi, ScaleMode.StretchToFill, false);
+        GUI.Box(rect, "Hand ROI");
     }
 
     static void DrawFacePolyline(FaceKeypoint[] lm, int[] indices, Color color)
