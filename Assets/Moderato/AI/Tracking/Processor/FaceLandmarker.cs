@@ -48,7 +48,7 @@ namespace Moderato.AI.Tracking.Processor
 
         // ---- detection parameters -------------------------------------------
         const float k_RoiScale       = 1.5f;
-        const float k_DetectThresh   = 0.75f;
+        const float k_DetectThresh   = 0.5f;
         const float k_PresenceThresh = 0.5f;
 
         readonly Worker m_DetectorWorker;
