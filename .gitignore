@@ -58,6 +58,7 @@ ExportedObj/
 *.pidb
 *.booproj
 *.svd
+*.slnx
 *.pdb
 *.mdb
 *.opendb
@@ -105,6 +106,10 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# Unity recovery scenes
+/[Aa]ssets/_Recovery/
+/[Aa]ssets/_Recovery.meta
 
 # Claude Code session state (user-specific)
 /.claude/

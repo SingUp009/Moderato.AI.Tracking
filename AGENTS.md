@@ -91,7 +91,7 @@ FaceFrame   face  = await faceLandmarker.DetectAsync(rt, ct);
 | Pose landmark Y | **top-origin**（0=上端、1=下端） | AlterEgo の `KpToVec` が `-kp.Y` を使用していることで確認 |
 | Hand OnGUI 描画 | `px = X * W`、`py = Y * H` | top-origin で OnGUI と一致するためそのまま |
 | Pose OnGUI 描画 | `px = X * W`、`py = Y * H`（visibility >= 0.5 のみ） | 同上 |
-| Hand GL 描画 | `GL.Vertex3(1f - X, 1f - Y, 0f)` | X ミラー補正 + Y を 1f- で top→bottom 変換 |
+| Hand GL 描画 | `GL.Vertex3(X, 1f - Y, 0f)` | X は OnGUI ドットと同じ、Y を 1f- で top→bottom 変換 |
 | Pose GL 描画 | `GL.Vertex3(1f - X, 1f - Y, 0f)` | 同上 |
 
 ---
@@ -106,7 +106,7 @@ RenderTexture
   → Worker.Schedule()                         # GPU 非同期スケジュール
   → await PeekOutput().ReadbackAndCloneAsync() # 非同期 readback
   → CPU 上で ROI 計算（BlazeUtils.Make*Roi）
-  → BlitRoi()                                 # 軸沿いクロップ（rotation=0 固定）
+  → BlitRoi()                                 # Hand は shader 回転クロップ、Pose/Face は軸沿いクロップ
   → TextureConverter.ToTensor()
   → Worker.Schedule()
   → await ReadbackAndCloneAsync()

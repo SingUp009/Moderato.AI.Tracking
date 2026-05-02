@@ -115,30 +115,31 @@ Web カメラ映像から人間の **ポーズ（BlazePose, 33 点）/ 手（Han
 **handedness 出力の型（post-sigmoid [0,1]）**
 - BlazeHand の handedness / presence 出力は **sigmoid 適用済みの [0,1] 値**で出力される。
 - raw logit と誤解して `< -0.5f` で Right 判定すると**永遠に true にならず、右手が常に Unknown** になるバグが生じる。
+- presence に再度 `Sigmoid` をかけると低 confidence でも 0.5 付近になり、空/ズレ ROI の固定ランドマークを描き続けるため禁止。
 - 正しい判定：`handednessRaw > 0.7f → Left（カメラ右）`、`< 0.3f → Right（カメラ左）`、それ以外 Unknown。
 
 **NMS IoU 閾値**
 - `k_NmsIouThresh = 0.3f` は厳しすぎ、両手が隣接すると 2 本目が suppressed される。
 - `0.5f` に緩和すると 2 本目検出率が改善する。
 
-**Hand ROI の回転バグ（MakeRoi vs MakeHandRoi）**
+**Hand ROI の回転・中心バグ（Unity BlazeHand sample 準拠）**
 - `DecodeHandRoi` が BlazePose 用 `MakeRoi`（`-(Atan2(-dy,dx)) - π/2`）を流用していたため2つのバグがあった：
   1. **ROI 中心 = 手首**（正しくはボックス中心 = 手のひら中心）
   2. **回転式に -π/2 オフセット付き** → 手が真上を向くとき約 90° のズレが ProjectLandmark に生じる
-- 左右非対称な症状（左手 OK、右手が 90° ずれ）は、左右でインデックス MCP の wrist からの dx 符号が逆になるため回転誤差量が異なることに起因。
-- 修正：`BlazeUtils.MakeHandRoi` を追加（`MakeFaceRoi` と同構造）。ROI 中心 = ボックス中心、回転 = `Atan2(-dy, dx)`（オフセットなし）。`DecodeHandRoi` はこれを使う。
+- 左右非対称な症状（左手 OK、右手が 90° ずれ）は、左右で MCP の wrist からの dx 符号が逆になるため回転誤差量が異なることに起因。
+- 修正：`BlazeUtils.MakeHandRoi` を追加。`boxSize = max(boxW, boxH)`、回転 = `π/2 - Atan2(dy, dx)`（手首 kp0→中指 MCP kp2 を ROI の Y 軸へ揃える）。
+- ROI 中心は `boxCenter + 0.5 * boxSize * normalize(kp2 - kp0)` にずらしてから、`boxSize *= 2.6`。MediaPipe の `shift_y: -0.5` 相当で、指先を landmarker 入力に含めるため必須。
 
-**BlitRoi と ProjectLandmark の整合性（rotation=0 必須）**
-- `BlitRoi` は **軸沿い（回転なし）クロップ**。`roi.Rotation` を Blit に適用していない。
-- `ProjectLandmark` に非ゼロの `roi.Rotation`（例：手が直立なら≈π/2）を渡すと、クロップ座標の Y オフセットが回転行列でX方向に混入し **90° ズレ**が生じる（face では回転≈0 なので誤差が小さく表面化しにくい）。
-- 修正：`DecodeLandmarkResult` 内で `ProjectLandmark` に渡す ROI は `rotation=0` に固定した `axisRoi` を使う（実際のクロップが回転していないため）。
-- `MakeHandRoi` が計算する回転情報は将来の回転 Blit 実装のために保持する。
+**Hand BlitRoi と ProjectLandmarkTopOrigin の整合性**
+- Hand は `RotatedRoiBlit` shader で ROI クロップにも `roi.Rotation` を適用し、`ProjectLandmarkTopOrigin` も同じ `roi.Rotation` で逆射影する。
+- shader が見つからない環境のみ軸沿いクロップへフォールバックし、その場合は `ProjectLandmarkTopOrigin` に `rotation=0` の ROI を渡す。
+- クロップ側と逆射影側の rotation を片方だけ変えると、右手などで **90° ズレ**が再発する。
 
 ### M8 実装で確定した座標系まとめ
 
 **Hand / Pose ランドマーク Y 軸：top-origin（0=上端）と確定**
 - AlterEgo の `KpToVec` / `HkToVec` が `-kp.Y` を使用（3D 変換で符号反転）→ top-origin の証明。
-- 正しい表示：OnGUI は `Y * Height`（そのまま）、GL は `GL.Vertex3(1f - X, 1f - Y, 0f)`（Y 反転）。
+- 正しい表示：OnGUI は `X * Width`, `Y * Height`（そのまま）、Hand GL は `GL.Vertex3(X, 1f - Y, 0f)`（Y のみ反転）。
 - Face（tflite2onnx）は別物（bottom-origin、デコーダで `1f - raw/size`）。モデル出所によって慣習が異なる点に注意。
 
 ---
